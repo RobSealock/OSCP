@@ -1,0 +1,58 @@
+: Best switches
+-sS -sV -Pn -T4 -p- -oX
+-sS -sV -Pn -T4 --open -oX
+
+:Quick Map (what's alive)
+sudo nmap \
+  -sS \
+  -sV \
+  -T4 \
+  -F \
+  --open \
+  -oA quick_10.10.10.10 \
+  xsltproc /usr/share/nmap/nmap.xsl \
+  quick_10.10.10.10.xml \
+  -o quick_10.10.10.10.html
+
+:Detailed single IP
+sudo nmap \
+  -sS \
+  -sV \
+  -Pn \
+  -T4 \
+  -p- \
+  -oA full_10.10.10.10 \
+  10.10.10.10
+xsltproc /usr/share/nmap/nmap.xsl \
+  full_10.10.10.10.xml \
+  -o full_10.10.10.10.html
+
+:Detailed Subnet
+sudo nmap \
+  -sS \
+  -sV \
+  -Pn \
+  -T4 \
+  --open \
+  -oA subnet_192.168.56.0_24 \
+  192.168.56.0/24
+xsltproc /usr/share/nmap/nmap.xsl \
+  subnet_192.168.56.0_24.xml \
+  -o subnet_192.168.56.0_24.html
+
+
+View
+xdg-open scan_10.10.10.10.html
+
+
+After Scan Convert
+python3 nmap_to_obs.py \
+  --xml full_10.10.10.10.xml \
+  --out obs.txt
+
+Run Against 
+python3 playbook_runner.py \
+  --playbook OSCP_playbook_enhanced.yaml \
+  --target 10.10.10.10 \
+  --obs-file obs.txt \
+  --out plan.md
