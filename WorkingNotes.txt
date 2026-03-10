@@ -1,3 +1,17 @@
+nmap -oA scan_target target
+        ↓
+scan_target.xml
+        ↓
+nmap_to_obs.py
+        ↓
+obs.txt
+        ↓
+playbook_runner.py
+        ↓
+plan.md / plan.json
+
+
+
 : Best switches
 -sS -sV -Pn -T4 -p- -oX
 -sS -sV -Pn -T4 --open -oX
@@ -56,3 +70,4 @@ python3 playbook_runner.py \
   --target 10.10.10.10 \
   --obs-file obs.txt \
   --out plan.md
+
