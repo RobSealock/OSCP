@@ -1,0 +1,779 @@
+#!/usr/bin/env python3
+"""
+interactive_nmap_launcher_v3.py
+
+Authorized-use scan launcher with:
+- workspaces per target/timestamp
+- scan resume support
+- HTML generation from Nmap XML
+- Markdown + Obsidian-friendly notes
+- visual attack path summaries (Mermaid)
+- optional service-based follow-up enumeration
+- optional nmap_to_obs.py integration
+
+Run:
+  sudo python3 interactive_nmap_launcher_v3.py
+"""
+
+from __future__ import annotations
+
+import ipaddress
+import os
+import shutil
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
+import xml.etree.ElementTree as ET
+
+
+# ---------------------------
+# General helpers
+# ---------------------------
+
+def now_stamp() -> str:
+    return datetime.now().strftime("%d%m%y-%H%M")
+
+
+def sanitize_target(target: str) -> str:
+    return target.replace("/", "_").replace(":", "_").strip()
+
+
+def require_root() -> None:
+    if os.geteuid() != 0:
+        print("[!] Run with sudo/root, for example:")
+        print("    sudo python3 interactive_nmap_launcher_v3.py")
+        sys.exit(1)
+
+
+def have_bin(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def require_nmap() -> None:
+    if not have_bin("nmap"):
+        print("[!] nmap not found in PATH.")
+        sys.exit(1)
+
+
+def yes_no(prompt: str, default: bool = False) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    ans = input(f"{prompt} {suffix}: ").strip().lower()
+    if not ans:
+        return default
+    return ans == "y"
+
+
+def prompt_until_valid(prompt: str, validator) -> str:
+    while True:
+        value = input(prompt).strip()
+        try:
+            return validator(value)
+        except ValueError as e:
+            print(f"[!] {e}")
+
+
+def validate_ip(value: str) -> str:
+    try:
+        ipaddress.ip_address(value)
+        return value
+    except ValueError:
+        raise ValueError("Expected single IP in format X.X.X.X")
+
+
+def validate_network(value: str) -> str:
+    try:
+        net = ipaddress.ip_network(value, strict=False)
+        return str(net)
+    except ValueError:
+        raise ValueError("Expected subnet in format X.X.X.0/24")
+
+
+def workspace_root() -> Path:
+    root = Path.cwd() / "scan_runs"
+    root.mkdir(exist_ok=True)
+    return root
+
+
+def make_workspace(scan_type: str, target: str, stamp: str) -> Path:
+    ws = workspace_root() / f"{scan_type}_{sanitize_target(target)}_{stamp}"
+    ws.mkdir(parents=True, exist_ok=True)
+    return ws
+
+
+def append_log(log: Optional[Path], text: str) -> None:
+    if log is None:
+        return
+    with log.open("a", encoding="utf-8") as f:
+        f.write(text)
+
+
+# ---------------------------
+# Command execution / resume
+# ---------------------------
+
+def run_streaming_command(
+    cmd: List[str],
+    label: str = "",
+    cwd: Optional[Path] = None,
+    combined_log: Optional[Path] = None,
+) -> int:
+    if label:
+        print(f"\n=== {label} ===")
+    print("[+] Running:", " ".join(cmd))
+    append_log(combined_log, f"\n=== {label or 'Command'} ===\n{' '.join(cmd)}\n\n")
+
+    with subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=str(cwd) if cwd else None,
+        bufsize=1,
+        universal_newlines=True,
+    ) as proc:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(line, end="")
+            append_log(combined_log, line)
+        return proc.wait()
+
+
+def run_or_resume_oA(
+    cmd: List[str],
+    base_path: Path,
+    label: str,
+    cwd: Optional[Path] = None,
+    combined_log: Optional[Path] = None,
+) -> int:
+    xml = Path(str(base_path) + ".xml")
+    nmap = Path(str(base_path) + ".nmap")
+    gnmap = Path(str(base_path) + ".gnmap")
+    if xml.exists() and nmap.exists() and gnmap.exists():
+        print(f"[+] Resume: existing Nmap output found for {base_path.name}, skipping step.")
+        append_log(combined_log, f"[+] Resume skip: {base_path}\n")
+        return 0
+    return run_streaming_command(cmd, label=label, cwd=cwd, combined_log=combined_log)
+
+
+# ---------------------------
+# XML / HTML / notes
+# ---------------------------
+
+def parse_nmap_xml(xml_file: Path) -> Dict:
+    result = {"hosts": []}
+    if not xml_file.exists():
+        return result
+    try:
+        tree = ET.parse(xml_file)
+    except ET.ParseError:
+        return result
+
+    root = tree.getroot()
+    for host in root.findall("host"):
+        state_el = host.find("status")
+        state = state_el.get("state", "unknown") if state_el is not None else "unknown"
+
+        address = "unknown"
+        for addr in host.findall("address"):
+            if addr.get("addrtype") == "ipv4":
+                address = addr.get("addr", "unknown")
+                break
+
+        hostnames = [x.get("name") for x in host.findall("./hostnames/hostname") if x.get("name")]
+        ports = []
+        for port in host.findall("./ports/port"):
+            st = port.find("state")
+            if st is None or st.get("state") != "open":
+                continue
+            svc = port.find("service")
+            scripts = []
+            for s in port.findall("script"):
+                scripts.append({
+                    "id": s.get("id", ""),
+                    "output": s.get("output", ""),
+                })
+            ports.append({
+                "port": port.get("portid", ""),
+                "protocol": port.get("protocol", ""),
+                "service": svc.get("name", "") if svc is not None else "",
+                "product": svc.get("product", "") if svc is not None else "",
+                "version": svc.get("version", "") if svc is not None else "",
+                "extrainfo": svc.get("extrainfo", "") if svc is not None else "",
+                "scripts": scripts,
+            })
+        result["hosts"].append({
+            "address": address,
+            "state": state,
+            "hostnames": hostnames,
+            "open_ports": ports,
+        })
+    return result
+
+
+def build_html(xml_file: Path, html_file: Path, log_file: Optional[Path] = None) -> None:
+    if not have_bin("xsltproc"):
+        print("[!] xsltproc not found; skipping HTML generation.")
+        return
+    if not xml_file.exists():
+        print(f"[!] XML not found; skipping HTML generation: {xml_file}")
+        return
+    cmd = ["xsltproc", "/usr/share/nmap/nmap.xsl", str(xml_file), "-o", str(html_file)]
+    run_streaming_command(cmd, label=f"Generate HTML: {html_file.name}", combined_log=log_file)
+
+
+def merge_nmap_xmls(xml_paths: Iterable[Path], output_xml: Path) -> bool:
+    xml_paths = [p for p in xml_paths if p.exists()]
+    if not xml_paths:
+        return False
+
+    merged_root = ET.Element("nmaprun", attrib={
+        "scanner": "nmap",
+        "args": "combined-from-multiple-scans",
+        "version": "merged",
+        "xmloutputversion": "1.05",
+    })
+    host_index = {}
+
+    def host_key(host_el: ET.Element) -> str:
+        for addr in host_el.findall("address"):
+            if addr.get("addrtype") == "ipv4":
+                return addr.get("addr", "unknown")
+        addr = host_el.find("address")
+        return addr.get("addr", "unknown") if addr is not None else "unknown"
+
+    for xml_path in xml_paths:
+        try:
+            root = ET.parse(xml_path).getroot()
+        except ET.ParseError:
+            continue
+
+        for host in root.findall("host"):
+            key = host_key(host)
+            if key not in host_index:
+                new_host = ET.SubElement(merged_root, "host")
+                for child in host:
+                    if child.tag != "ports":
+                        new_host.append(child)
+                ET.SubElement(new_host, "ports")
+                host_index[key] = new_host
+
+            target_host = host_index[key]
+            target_ports = target_host.find("ports")
+            if target_ports is None:
+                target_ports = ET.SubElement(target_host, "ports")
+
+            existing = {(p.get("protocol"), p.get("portid")) for p in target_ports.findall("port")}
+            source_ports = host.find("ports")
+            if source_ports is None:
+                continue
+
+            for p in source_ports.findall("port"):
+                p_key = (p.get("protocol"), p.get("portid"))
+                if p_key in existing:
+                    continue
+                target_ports.append(p)
+                existing.add(p_key)
+
+    ET.ElementTree(merged_root).write(output_xml, encoding="utf-8", xml_declaration=True)
+    return True
+
+
+def service_buckets(parsed: Dict) -> Dict[str, List[Tuple[str, str]]]:
+    buckets: Dict[str, List[Tuple[str, str]]] = {}
+    for host in parsed.get("hosts", []):
+        ip = host["address"]
+        for p in host["open_ports"]:
+            svc = p["service"] or "unknown"
+            buckets.setdefault(svc, []).append((ip, p["port"]))
+    return buckets
+
+
+def generate_mermaid(parsed: Dict) -> str:
+    lines = [
+        "flowchart TD",
+        "  A[Start] --> B[Initial Nmap Scan]",
+    ]
+    idx = 0
+    for host in parsed.get("hosts", []):
+        host_node = f"H{idx}"
+        lines.append(f'  B --> {host_node}["{host["address"]}"]')
+        j = 0
+        for p in host["open_ports"]:
+            port_node = f"P{idx}_{j}"
+            label = f'{p["port"]}/{p["protocol"]} {p["service"]}'.replace('"', "'")
+            lines.append(f'  {host_node} --> {port_node}["{label}"]')
+            svc = (p["service"] or "").lower()
+            if svc in {"http", "https"}:
+                lines.append(f'  {port_node} --> W{idx}_{j}["Web enum"]')
+            elif svc in {"microsoft-ds", "netbios-ssn"}:
+                lines.append(f'  {port_node} --> S{idx}_{j}["SMB enum"]')
+            elif svc == "ftp":
+                lines.append(f'  {port_node} --> F{idx}_{j}["FTP review"]')
+            elif svc == "snmp":
+                lines.append(f'  {port_node} --> N{idx}_{j}["SNMP walk"]')
+            elif svc == "ldap":
+                lines.append(f'  {port_node} --> L{idx}_{j}["LDAP review"]')
+            j += 1
+        idx += 1
+    return "```mermaid\n" + "\n".join(lines) + "\n```"
+
+
+def generate_markdown_summary(
+    title: str,
+    target: str,
+    scan_type: str,
+    stamp: str,
+    xml_files: List[Path],
+    output_md: Path,
+    notes: Optional[List[str]] = None,
+) -> None:
+    lines = [
+        f"# {title}",
+        "",
+        f"- **Scan Type:** {scan_type}",
+        f"- **Target:** `{target}`",
+        f"- **Timestamp:** `{stamp}`",
+        "",
+    ]
+    if notes:
+        lines.append("## Notes")
+        lines.append("")
+        for note in notes:
+            lines.append(f"- {note}")
+        lines.append("")
+
+    lines.append("## Results")
+    lines.append("")
+    merged_parsed = {"hosts": []}
+    for xml in xml_files:
+        parsed = parse_nmap_xml(xml)
+        merged_parsed["hosts"].extend(parsed["hosts"])
+        lines.append(f"### {xml.name}")
+        lines.append("")
+        if not parsed["hosts"]:
+            lines.append("- No parseable hosts found.")
+            lines.append("")
+            continue
+
+        for host in parsed["hosts"]:
+            lines.append(f"#### Host `{host['address']}`")
+            if host["hostnames"]:
+                lines.append(f"- Hostnames: {', '.join(host['hostnames'])}")
+            if not host["open_ports"]:
+                lines.append("- No open ports parsed.")
+                lines.append("")
+                continue
+            lines.append("- Open ports:")
+            for p in host["open_ports"]:
+                detail = " ".join(x for x in [p["service"], p["product"], p["version"], p["extrainfo"]] if x).strip()
+                lines.append(f"  - `{p['port']}/{p['protocol']}` {detail}".rstrip())
+                for s in p["scripts"][:2]:
+                    if s["id"] or s["output"]:
+                        lines.append(f"    - script `{s['id']}`: {s['output'][:150].replace(chr(10), ' ')}")
+            lines.append("")
+
+    lines.append("## Attack Path Summary")
+    lines.append("")
+    lines.append(generate_mermaid(merged_parsed))
+    lines.append("")
+
+    lines.append("## Service Overview")
+    lines.append("")
+    buckets = service_buckets(merged_parsed)
+    if buckets:
+        for svc, items in sorted(buckets.items()):
+            item_text = ", ".join(f"{ip}:{port}" for ip, port in items[:10])
+            lines.append(f"- **{svc}**: {item_text}")
+    else:
+        lines.append("- No services parsed.")
+
+    output_md.write_text("\n".join(lines), encoding="utf-8")
+
+
+def generate_obsidian_host_notes(parsed: Dict, notes_dir: Path) -> None:
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    for host in parsed.get("hosts", []):
+        host_file = notes_dir / f"{sanitize_target(host['address'])}.md"
+        lines = [
+            f"# Host {host['address']}",
+            "",
+            "## Open Ports",
+            "",
+        ]
+        if not host["open_ports"]:
+            lines.append("- No open ports parsed.")
+        else:
+            for p in host["open_ports"]:
+                detail = " ".join(x for x in [p["service"], p["product"], p["version"], p["extrainfo"]] if x)
+                lines.append(f"- `{p['port']}/{p['protocol']}` {detail}".rstrip())
+        lines += [
+            "",
+            "## Follow-up Ideas",
+            "",
+            "- Web: content discovery, tech fingerprinting",
+            "- SMB: shares, users, security mode",
+            "- LDAP/Kerberos: directory and identity review",
+            "- SNMP: community string and exposed OIDs",
+            "",
+        ]
+        host_file.write_text("\n".join(lines), encoding="utf-8")
+
+
+# ---------------------------
+# Obsidian conversion
+# ---------------------------
+
+def maybe_run_obs(xml_file: Path, workspace: Path) -> None:
+    obs_script = Path.cwd() / "nmap_to_obs.py"
+    if not obs_script.exists():
+        print("[+] nmap_to_obs.py not found in current working directory; skipping.")
+        return
+    if not xml_file.exists():
+        print(f"[!] XML not found for Obsidian conversion: {xml_file}")
+        return
+    if not yes_no(f"Run nmap_to_obs.py against {xml_file.name}?", default=False):
+        return
+    obs_out = workspace / f"{xml_file.stem}_obs.txt"
+    cmd = ["python3", str(obs_script), "--xml", str(xml_file), "--out", str(obs_out)]
+    rc = run_streaming_command(cmd, label=f"Convert to obs -> {obs_out.name}", cwd=workspace)
+    if rc == 0:
+        print(f"[+] Obsidian output written to: {obs_out}")
+
+
+# ---------------------------
+# Follow-up enumeration
+# ---------------------------
+
+def follow_up_http(ip: str, port: str, out_dir: Path, log_file: Optional[Path]) -> None:
+    url = f"http://{ip}:{port}" if port != "80" else f"http://{ip}"
+    if have_bin("whatweb"):
+        run_streaming_command(["whatweb", url], label=f"HTTP whatweb {ip}:{port}", combined_log=log_file)
+    if have_bin("nikto"):
+        run_streaming_command(["nikto", "-h", url], label=f"HTTP nikto {ip}:{port}", combined_log=log_file)
+    if have_bin("ffuf"):
+        wordlist = "/usr/share/wordlists/dirb/common.txt"
+        if Path(wordlist).exists():
+            run_streaming_command(
+                ["ffuf", "-u", f"{url}/FUZZ", "-w", wordlist, "-mc", "200,301,302,403"],
+                label=f"HTTP ffuf {ip}:{port}",
+                combined_log=log_file
+            )
+
+
+def follow_up_smb(ip: str, out_dir: Path, log_file: Optional[Path]) -> None:
+    if have_bin("smbclient"):
+        run_streaming_command(["smbclient", "-L", f"//{ip}", "-N"], label=f"SMB smbclient {ip}", combined_log=log_file)
+    if have_bin("enum4linux"):
+        run_streaming_command(["enum4linux", "-a", ip], label=f"SMB enum4linux {ip}", combined_log=log_file)
+
+
+def follow_up_snmp(ip: str, out_dir: Path, log_file: Optional[Path]) -> None:
+    if have_bin("snmpwalk"):
+        run_streaming_command(["snmpwalk", "-v2c", "-c", "public", ip], label=f"SNMP walk {ip}", combined_log=log_file)
+
+
+def follow_up_ftp(ip: str, port: str, out_dir: Path, log_file: Optional[Path]) -> None:
+    run_streaming_command(["nmap", "-sV", "-p", port, "--script", "ftp-anon,ftp-syst", ip], label=f"FTP NSE {ip}:{port}", combined_log=log_file)
+
+
+def follow_up_ldap(ip: str, log_file: Optional[Path]) -> None:
+    run_streaming_command(["nmap", "-p", "389,636,3268", "-sV", "--script", "ldap* and not brute", ip], label=f"LDAP follow-up {ip}", combined_log=log_file)
+
+
+def service_follow_up(parsed: Dict, workspace: Path, log_file: Optional[Path]) -> None:
+    follow_dir = workspace / "follow_up"
+    follow_dir.mkdir(exist_ok=True)
+
+    seen = set()
+    for host in parsed.get("hosts", []):
+        ip = host["address"]
+        for p in host["open_ports"]:
+            svc = (p["service"] or "").lower()
+            port = p["port"]
+            key = (ip, port, svc)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            if svc in {"http", "https"}:
+                follow_up_http(ip, port, follow_dir, log_file)
+            elif svc in {"microsoft-ds", "netbios-ssn"}:
+                follow_up_smb(ip, follow_dir, log_file)
+            elif svc == "snmp":
+                follow_up_snmp(ip, follow_dir, log_file)
+            elif svc == "ftp":
+                follow_up_ftp(ip, port, follow_dir, log_file)
+            elif svc == "ldap":
+                follow_up_ldap(ip, log_file)
+
+
+# ---------------------------
+# Scan actions
+# ---------------------------
+
+def post_process(base: Path, workspace: Path, title: str, target: str, stamp: str, log_file: Optional[Path] = None) -> None:
+    xml_file = Path(str(base) + ".xml")
+    html_file = Path(str(base) + ".html")
+    md_file = Path(str(base) + ".md")
+
+    build_html(xml_file, html_file, log_file=log_file)
+    generate_markdown_summary(
+        title=title,
+        target=target,
+        scan_type=base.name.split("_")[0],
+        stamp=stamp,
+        xml_files=[xml_file],
+        output_md=md_file,
+        notes=[
+            f"Workspace: `{workspace}`",
+            f"HTML: `{html_file.name if html_file.exists() else 'not generated'}`",
+        ],
+    )
+    parsed = parse_nmap_xml(xml_file)
+    generate_obsidian_host_notes(parsed, workspace / "obsidian_notes")
+
+    if yes_no("Run automatic service-based follow-up enumeration?", default=False):
+        service_follow_up(parsed, workspace, log_file)
+
+    maybe_run_obs(xml_file, workspace)
+    print(f"[+] Workspace: {workspace}")
+
+
+def fast_subnet_scan() -> None:
+    target = prompt_until_valid("Enter subnet (X.X.X.0/24): ", validate_network)
+    stamp = now_stamp()
+    workspace = make_workspace("Fast", target, stamp)
+    base = workspace / f"Fast_{sanitize_target(target)}_{stamp}"
+    log_file = workspace / "run.log"
+
+    cmd = [
+        "nmap", "-sS", "-sV", "-T4", "-F", "--open",
+        "--stats-every", "10s",
+        "-oA", str(base), target
+    ]
+    run_or_resume_oA(cmd, base, "Fast Subnet Scan", cwd=workspace, combined_log=log_file)
+    post_process(base, workspace, "Fast Subnet Scan Summary", target, stamp, log_file=log_file)
+
+
+def detailed_ip_scan() -> None:
+    target = prompt_until_valid("Enter IP (X.X.X.X): ", validate_ip)
+    stamp = now_stamp()
+    workspace = make_workspace("IP", target, stamp)
+    base = workspace / f"IP_{sanitize_target(target)}_{stamp}"
+    log_file = workspace / "run.log"
+
+    cmd = [
+        "nmap", "-sS", "-sV", "-Pn", "-T4", "-p-",
+        "--stats-every", "10s",
+        "-oA", str(base), target
+    ]
+    run_or_resume_oA(cmd, base, "Detailed IP Scan", cwd=workspace, combined_log=log_file)
+    post_process(base, workspace, "Detailed IP Scan Summary", target, stamp, log_file=log_file)
+
+
+def discover_live_hosts(network: str, workspace: Path, stamp: str, log_file: Optional[Path]) -> List[str]:
+    base = workspace / f"Discovery_{sanitize_target(network)}_{stamp}"
+    cmd = ["nmap", "-sn", "--stats-every", "10s", "-oA", str(base), network]
+    run_or_resume_oA(cmd, base, "Host Discovery", cwd=workspace, combined_log=log_file)
+    parsed = parse_nmap_xml(Path(str(base) + ".xml"))
+    return [h["address"] for h in parsed["hosts"] if h["address"] != "unknown"]
+
+
+def host_full_scan(ip: str, workspace: Path, stamp: str) -> Tuple[str, Path]:
+    base = workspace / f"Host_{sanitize_target(ip)}_{stamp}"
+    cmd = ["nmap", "-sS", "-sV", "-Pn", "-T4", "-p-", "--stats-every", "10s", "-oA", str(base), ip]
+    run_or_resume_oA(cmd, base, f"Per-host scan {ip}", cwd=workspace, combined_log=workspace / "run.log")
+    return ip, Path(str(base) + ".xml")
+
+
+def detailed_subnet_scan() -> None:
+    target = prompt_until_valid("Enter subnet (X.X.X.0/24): ", validate_network)
+    stamp = now_stamp()
+    workspace = make_workspace("Full", target, stamp)
+    log_file = workspace / "run.log"
+
+    parallel_mode = yes_no("Use parallel host-based mode?", default=True)
+    if not parallel_mode:
+        base = workspace / f"Full_{sanitize_target(target)}_{stamp}"
+        cmd = [
+            "nmap", "-sS", "-sV", "-Pn", "-T4", "--open",
+            "--stats-every", "10s",
+            "-oA", str(base), target
+        ]
+        run_or_resume_oA(cmd, base, "Detailed Subnet Scan", cwd=workspace, combined_log=log_file)
+        post_process(base, workspace, "Detailed Subnet Scan Summary", target, stamp, log_file=log_file)
+        return
+
+    live_hosts = discover_live_hosts(target, workspace, stamp, log_file)
+    if not live_hosts:
+        print("[!] No live hosts found.")
+        return
+
+    worker_raw = input("Parallel worker count [default 4]: ").strip()
+    try:
+        workers = max(1, int(worker_raw)) if worker_raw else 4
+    except ValueError:
+        workers = 4
+
+    xmls = []
+    total = len(live_hosts)
+    print(f"[+] Parallel scan of {total} hosts with {workers} workers.")
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(host_full_scan, ip, workspace, stamp): ip for ip in live_hosts}
+        completed = 0
+        for future in as_completed(futures):
+            ip = futures[future]
+            try:
+                host, xml_path = future.result()
+                completed += 1
+                print(f"[+] Completed {completed}/{total}: {host}")
+                if xml_path.exists():
+                    xmls.append(xml_path)
+            except Exception as e:
+                completed += 1
+                print(f"[!] Error on {ip}: {e}")
+
+    combined_xml = workspace / f"Full_{sanitize_target(target)}_{stamp}_combined.xml"
+    combined_html = workspace / f"Full_{sanitize_target(target)}_{stamp}_combined.html"
+    combined_md = workspace / f"Full_{sanitize_target(target)}_{stamp}_combined.md"
+
+    if merge_nmap_xmls(xmls, combined_xml):
+        build_html(combined_xml, combined_html, log_file=log_file)
+        generate_markdown_summary(
+            title="Detailed Subnet Parallel Scan Summary",
+            target=target,
+            scan_type="Full",
+            stamp=stamp,
+            xml_files=[combined_xml],
+            output_md=combined_md,
+            notes=[
+                f"Workspace: `{workspace}`",
+                f"Live hosts: `{len(live_hosts)}`",
+                f"Workers: `{workers}`",
+            ],
+        )
+        parsed = parse_nmap_xml(combined_xml)
+        generate_obsidian_host_notes(parsed, workspace / "obsidian_notes")
+
+        if yes_no("Run automatic service-based follow-up enumeration?", default=False):
+            service_follow_up(parsed, workspace, log_file)
+        maybe_run_obs(combined_xml, workspace)
+    else:
+        print("[!] Could not create combined XML.")
+
+    print(f"[+] Workspace: {workspace}")
+
+
+def ad_scan() -> None:
+    target = prompt_until_valid("Enter AD target IP (X.X.X.X): ", validate_ip)
+    stamp = now_stamp()
+    workspace = make_workspace("AD", target, stamp)
+    log_file = workspace / f"AD_{sanitize_target(target)}_{stamp}_combined.txt"
+    append_log(log_file, f"AD scan target: {target}\nTimestamp: {stamp}\n\n")
+    base = f"AD_{sanitize_target(target)}_{stamp}"
+
+    steps = [
+        ("Step 1/5 - AD Services", [
+            "nmap", "-sS", "-sV", "-Pn", "-T4",
+            "-p", "53,88,135,389,445,636,3268,3269",
+            "--stats-every", "10s",
+            "-oA", str(workspace / f"{base}_services"), target
+        ]),
+        ("Step 2/5 - LDAP Scan", [
+            "nmap", "-p", "389,636,3268", "-sV",
+            "--script", "ldap* and not brute",
+            "--stats-every", "10s",
+            "-oA", str(workspace / f"{base}_ldap"), target
+        ]),
+        ("Step 3/5 - SMB Info", [
+            "nmap", "-p", "445",
+            "--script", "smb-security-mode,smb-os-discovery",
+            "--stats-every", "10s",
+            "-oA", str(workspace / f"{base}_smb"), target
+        ]),
+        ("Step 4/5 - SMB Enum", [
+            "nmap", "-p", "445",
+            "--script", "smb-enum-shares,smb-enum-users,smb-enum-groups",
+            "--stats-every", "10s",
+            "-oA", str(workspace / f"{base}_smb_enum"), target
+        ]),
+        ("Step 5/5 - Kerberos", [
+            "nmap", "-p", "88",
+            "--script", "krb5-enum-users",
+            "--stats-every", "10s",
+            "-oA", str(workspace / f"{base}_kerb"), target
+        ]),
+    ]
+
+    xmls = []
+    for label, cmd in steps:
+        out_base = Path(cmd[cmd.index("-oA") + 1])
+        run_or_resume_oA(cmd, out_base, label, cwd=workspace, combined_log=log_file)
+        xml = Path(str(out_base) + ".xml")
+        if xml.exists():
+            xmls.append(xml)
+
+    combined_xml = workspace / f"{base}_combined.xml"
+    combined_html = workspace / f"{base}_combined.html"
+    combined_md = workspace / f"{base}_combined.md"
+
+    if merge_nmap_xmls(xmls, combined_xml):
+        build_html(combined_xml, combined_html, log_file=log_file)
+        generate_markdown_summary(
+            title="AD Scan Summary",
+            target=target,
+            scan_type="AD",
+            stamp=stamp,
+            xml_files=[combined_xml],
+            output_md=combined_md,
+            notes=[
+                f"Workspace: `{workspace}`",
+                f"Combined log: `{log_file.name}`",
+                "Steps: services, LDAP, SMB info, SMB enum, Kerberos",
+            ],
+        )
+        parsed = parse_nmap_xml(combined_xml)
+        generate_obsidian_host_notes(parsed, workspace / "obsidian_notes")
+
+        if yes_no("Run automatic service-based follow-up enumeration?", default=True):
+            service_follow_up(parsed, workspace, log_file)
+        maybe_run_obs(combined_xml, workspace)
+    else:
+        print("[!] Could not create combined AD XML.")
+
+    print(f"[+] Workspace: {workspace}")
+
+
+# ---------------------------
+# Main
+# ---------------------------
+
+def main() -> None:
+    require_root()
+    require_nmap()
+
+    print("\nSelect Scan Type")
+    print("A) Fast Subnet Scan")
+    print("B) Detailed IP Scan")
+    print("C) Detailed Subnet Scan")
+    print("D) AD Scan")
+
+    choice = input("Choice [A/B/C/D]: ").strip().upper()
+    if choice == "A":
+        fast_subnet_scan()
+    elif choice == "B":
+        detailed_ip_scan()
+    elif choice == "C":
+        detailed_subnet_scan()
+    elif choice == "D":
+        ad_scan()
+    else:
+        print("[!] Invalid option.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
