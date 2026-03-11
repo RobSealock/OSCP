@@ -1,4 +1,9 @@
+Goal:
 nmap -oA scan_target target
+1.Sigle
+2.Fast Subnet
+3.Subnet
+4.Active Directory (detailed) 
         ↓
 scan_target.xml
         ↓
@@ -70,4 +75,5 @@ python3 playbook_runner.py \
   --target 10.10.10.10 \
   --obs-file obs.txt \
   --out plan.md
+
 
