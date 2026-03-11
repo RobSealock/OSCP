@@ -1,0 +1,378 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  setup_oscp_toolkit.sh
+#  One-shot setup for interactive_nmap_launcher_v4 + OSCP playbook
+#  Authorized lab / CTF / exam-prep use only
+#  chmod +x setup_oscp_toolkit.sh
+#  sudo bash setup_oscp_toolkit.sh
+#  
+# Then run from:
+#  cd /opt/oscp-toolkit && sudo python3 interactive_nmap_launcher_v4.py
+# or via symlink:
+#  cd /opt/oscp-toolkit && sudo oscp-scan
+#  
+# =============================================================================
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Colours
+# ---------------------------------------------------------------------------
+RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
+
+info()    { echo -e "${CYAN}[*]${RESET} $*"; }
+success() { echo -e "${GREEN}[+]${RESET} $*"; }
+warn()    { echo -e "${YELLOW}[!]${RESET} $*"; }
+error()   { echo -e "${RED}[✗]${RESET} $*"; }
+header()  { echo -e "\n${BOLD}${CYAN}==============================${RESET}"; \
+             echo -e "${BOLD}${CYAN}  $*${RESET}"; \
+             echo -e "${BOLD}${CYAN}==============================${RESET}"; }
+
+# ---------------------------------------------------------------------------
+# Root check
+# ---------------------------------------------------------------------------
+if [[ $EUID -ne 0 ]]; then
+    error "Run this script with sudo:"
+    echo "    sudo bash setup_oscp_toolkit.sh"
+    exit 1
+fi
+
+# Keep track of the real user who called sudo (for pip installs etc.)
+REAL_USER="${SUDO_USER:-$USER}"
+INSTALL_DIR="/opt/oscp-toolkit"
+
+# ---------------------------------------------------------------------------
+# Banner
+# ---------------------------------------------------------------------------
+clear
+echo -e "${BOLD}${RED}"
+cat << 'EOF'
+  ___  ____  ____ ____     _____           _ _    _ _
+ / _ \/ ___||  _ \___ \   |_   _|__   ___ | | | _(_) |_
+| | | \___ \| |_) |__) |    | |/ _ \ / _ \| | |/ / | __|
+| |_| |___) |  __// __/     | | (_) | (_) | |   <| | |_
+ \___/|____/|_|  |_____|    |_|\___/ \___/|_|_|\_\_|\__|
+
+         Nmap Launcher v4 + Playbook Setup Script
+         Authorized lab / CTF / exam-prep use only
+EOF
+echo -e "${RESET}"
+
+# ---------------------------------------------------------------------------
+# STEP 1 — System package prerequisites
+# ---------------------------------------------------------------------------
+header "STEP 1 — System Packages"
+
+APT_PACKAGES=(
+    # Core
+    nmap
+    python3
+    python3-pip
+    python3-venv
+    curl
+    wget
+    git
+    # Nmap HTML output
+    xsltproc
+    # Web enumeration
+    nikto
+    # SMB enumeration
+    smbclient
+    enum4linux
+    # SNMP
+    snmp
+    snmp-mibs-downloader
+    # Redis
+    redis-tools
+    # Misc
+    jq
+    dnsutils
+    netcat-openbsd
+)
+
+info "Updating apt cache..."
+apt-get update -qq
+
+MISSING_APT=()
+for pkg in "${APT_PACKAGES[@]}"; do
+    if ! dpkg -s "$pkg" &>/dev/null 2>&1; then
+        MISSING_APT+=("$pkg")
+    fi
+done
+
+if [[ ${#MISSING_APT[@]} -gt 0 ]]; then
+    info "Installing: ${MISSING_APT[*]}"
+    apt-get install -y -qq "${MISSING_APT[@]}" 2>/dev/null || {
+        warn "Some packages failed — continuing. Check output above."
+    }
+else
+    success "All apt packages already installed."
+fi
+
+# ---------------------------------------------------------------------------
+# STEP 2 — Python prerequisites
+# ---------------------------------------------------------------------------
+header "STEP 2 — Python Packages"
+
+PYTHON_PACKAGES=(
+    pyyaml        # Playbook YAML parsing
+    requests      # Used by optional helper scripts
+    lxml          # Faster XML parsing (optional but nice)
+)
+
+info "Installing Python packages (system-wide)..."
+for pkg in "${PYTHON_PACKAGES[@]}"; do
+    if python3 -c "import ${pkg//-/_}" &>/dev/null 2>&1; then
+        success "  ${pkg} already installed"
+    else
+        info "  Installing ${pkg}..."
+        pip3 install --quiet --break-system-packages "$pkg" 2>/dev/null \
+            || pip3 install --quiet "$pkg" 2>/dev/null \
+            || warn "  Failed to install ${pkg} — install manually: pip3 install ${pkg}"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# STEP 3 — External tools (not in apt)
+# ---------------------------------------------------------------------------
+header "STEP 3 — External Tools"
+
+# ---- ffuf ----
+if command -v ffuf &>/dev/null; then
+    success "ffuf already installed: $(which ffuf)"
+else
+    info "Installing ffuf..."
+    FFUF_VER=$(curl -s https://api.github.com/repos/ffuf/ffuf/releases/latest \
+               | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])" 2>/dev/null || echo "v2.1.0")
+    FFUF_URL="https://github.com/ffuf/ffuf/releases/download/${FFUF_VER}/ffuf_${FFUF_VER#v}_linux_amd64.tar.gz"
+    TMP=$(mktemp -d)
+    if curl -sL "$FFUF_URL" -o "${TMP}/ffuf.tar.gz" 2>/dev/null; then
+        tar -xzf "${TMP}/ffuf.tar.gz" -C "$TMP" 2>/dev/null
+        mv "${TMP}/ffuf" /usr/local/bin/ffuf
+        chmod +x /usr/local/bin/ffuf
+        success "ffuf installed: $(ffuf -V 2>/dev/null | head -1)"
+    else
+        warn "ffuf download failed. Install manually: https://github.com/ffuf/ffuf/releases"
+    fi
+    rm -rf "$TMP"
+fi
+
+# ---- gobuster ----
+if command -v gobuster &>/dev/null; then
+    success "gobuster already installed: $(which gobuster)"
+else
+    info "Installing gobuster via apt..."
+    apt-get install -y -qq gobuster 2>/dev/null \
+        || warn "gobuster not available in apt. Install via: go install github.com/OJ/gobuster/v3@latest"
+fi
+
+# ---- whatweb ----
+if command -v whatweb &>/dev/null; then
+    success "whatweb already installed: $(which whatweb)"
+else
+    info "Installing whatweb via apt..."
+    apt-get install -y -qq whatweb 2>/dev/null \
+        || warn "whatweb not available in apt. Install via: gem install whatweb"
+fi
+
+# ---- crackmapexec / netexec ----
+if command -v netexec &>/dev/null; then
+    success "netexec already installed: $(which netexec)"
+elif command -v crackmapexec &>/dev/null; then
+    success "crackmapexec already installed: $(which crackmapexec)"
+else
+    info "Attempting to install netexec (nxc)..."
+    pip3 install --quiet --break-system-packages netexec 2>/dev/null \
+        || pip3 install --quiet netexec 2>/dev/null \
+        || {
+            warn "netexec pip install failed. Trying pipx..."
+            if command -v pipx &>/dev/null; then
+                pipx install netexec 2>/dev/null || true
+            fi
+            warn "If netexec is still missing, install manually:"
+            warn "  pip3 install netexec  OR  apt install crackmapexec"
+        }
+    command -v netexec &>/dev/null && success "netexec installed."
+fi
+
+# ---- wpscan ----
+if command -v wpscan &>/dev/null; then
+    success "wpscan already installed: $(which wpscan)"
+else
+    info "Installing wpscan via gem..."
+    if command -v gem &>/dev/null; then
+        gem install wpscan --quiet 2>/dev/null \
+            && success "wpscan installed." \
+            || warn "wpscan gem install failed. Install ruby first: apt install ruby"
+    else
+        warn "ruby gem not found. Install ruby then: gem install wpscan"
+    fi
+fi
+
+# ---- nmap vulners script ----
+VULNERS_PATH="/usr/share/nmap/scripts/vulners.nse"
+if [[ -f "$VULNERS_PATH" ]]; then
+    success "vulners.nse already present."
+else
+    info "Downloading vulners.nse for version-matched CVE output..."
+    curl -sL "https://raw.githubusercontent.com/vulnersCom/nmap-vulners/master/vulners.nse" \
+         -o "$VULNERS_PATH" 2>/dev/null \
+        && nmap --script-updatedb -q 2>/dev/null \
+        && success "vulners.nse installed and script DB updated." \
+        || warn "vulners.nse download failed. Get it from: https://github.com/vulnersCom/nmap-vulners"
+fi
+
+# ---- wordlists ----
+header "STEP 3b — Wordlists"
+
+if [[ -f /usr/share/wordlists/rockyou.txt ]]; then
+    success "rockyou.txt already present."
+elif [[ -f /usr/share/wordlists/rockyou.txt.gz ]]; then
+    info "Decompressing rockyou.txt.gz..."
+    gunzip /usr/share/wordlists/rockyou.txt.gz
+    success "rockyou.txt ready."
+else
+    info "Installing wordlists package..."
+    apt-get install -y -qq wordlists 2>/dev/null \
+        || warn "wordlists package not found. Install seclists manually."
+fi
+
+if [[ ! -d /usr/share/seclists ]]; then
+    info "Installing seclists..."
+    apt-get install -y -qq seclists 2>/dev/null || {
+        info "apt seclists not found — cloning from GitHub (this may take a moment)..."
+        git clone --quiet --depth 1 https://github.com/danielmiessler/SecLists.git \
+            /usr/share/seclists 2>/dev/null \
+            && success "SecLists cloned to /usr/share/seclists" \
+            || warn "SecLists clone failed. Download manually from https://github.com/danielmiessler/SecLists"
+    }
+else
+    success "SecLists already present: /usr/share/seclists"
+fi
+
+# ---------------------------------------------------------------------------
+# STEP 4 — Download toolkit files from GitHub
+# ---------------------------------------------------------------------------
+header "STEP 4 — Downloading Toolkit Files"
+
+mkdir -p "$INSTALL_DIR"
+
+RAW_BASE="https://raw.githubusercontent.com/RobSealock/OSCP/main"
+
+declare -A FILES=(
+    ["interactive_nmap_launcher_v4.py.txt"]="interactive_nmap_launcher_v4.py"
+    ["OSCP_playbook_enhanced.yaml.txt"]="OSCP_playbook_enhanced_yaml.txt"
+)
+
+for SRC in "${!FILES[@]}"; do
+    DEST="${FILES[$SRC]}"
+    DEST_PATH="${INSTALL_DIR}/${DEST}"
+    URL="${RAW_BASE}/${SRC}"
+
+    info "Downloading ${SRC} → ${DEST}"
+    if curl -sL "$URL" -o "$DEST_PATH" 2>/dev/null && [[ -s "$DEST_PATH" ]]; then
+        success "  Saved: ${DEST_PATH}"
+    else
+        error "  Failed to download ${SRC}"
+        error "  URL tried: ${URL}"
+        warn  "  Download manually and place in ${INSTALL_DIR}/"
+    fi
+done
+
+# Make the launcher executable
+chmod +x "${INSTALL_DIR}/interactive_nmap_launcher_v4.py" 2>/dev/null || true
+
+# Symlink into PATH for convenience
+if [[ ! -L /usr/local/bin/oscp-scan ]]; then
+    ln -sf "${INSTALL_DIR}/interactive_nmap_launcher_v4.py" /usr/local/bin/oscp-scan
+    success "Symlink created: oscp-scan → ${INSTALL_DIR}/interactive_nmap_launcher_v4.py"
+fi
+
+# ---------------------------------------------------------------------------
+# STEP 5 — Verify Python syntax of downloaded launcher
+# ---------------------------------------------------------------------------
+header "STEP 5 — Syntax Check"
+
+LAUNCHER="${INSTALL_DIR}/interactive_nmap_launcher_v4.py"
+if [[ -f "$LAUNCHER" ]]; then
+    if python3 -m py_compile "$LAUNCHER" 2>/dev/null; then
+        success "Syntax OK: ${LAUNCHER}"
+    else
+        error "Syntax error in downloaded launcher — file may be incomplete or corrupted."
+        warn  "Re-download manually from GitHub and check the file."
+    fi
+else
+    warn "Launcher not found — skipping syntax check."
+fi
+
+# ---------------------------------------------------------------------------
+# STEP 6 — Create scan_runs working directory
+# ---------------------------------------------------------------------------
+header "STEP 6 — Working Directory"
+
+SCAN_DIR="${INSTALL_DIR}/scan_runs"
+mkdir -p "$SCAN_DIR"
+success "Scan output directory: ${SCAN_DIR}"
+
+# ---------------------------------------------------------------------------
+# STEP 7 — Final tool availability summary
+# ---------------------------------------------------------------------------
+header "STEP 7 — Final Tool Check"
+
+declare -A TOOL_DESC=(
+    ["nmap"]="Port scanning (required)"
+    ["python3"]="Script runtime (required)"
+    ["xsltproc"]="XML→HTML report generation"
+    ["whatweb"]="Web fingerprinting"
+    ["nikto"]="Web baseline scanner"
+    ["ffuf"]="Content / directory discovery"
+    ["gobuster"]="Content discovery (alt)"
+    ["smbclient"]="SMB share listing"
+    ["enum4linux"]="SMB full enumeration"
+    ["netexec"]="SMB/WinRM/LDAP enum (nxc)"
+    ["crackmapexec"]="SMB/WinRM enum (legacy cme)"
+    ["snmpwalk"]="SNMP community walk"
+    ["wpscan"]="WordPress enumeration"
+    ["redis-cli"]="Redis unauthenticated check"
+    ["curl"]="HTTP utility"
+    ["wget"]="Download utility"
+)
+
+ALL_OK=true
+for tool in "${!TOOL_DESC[@]}"; do
+    if command -v "$tool" &>/dev/null; then
+        echo -e "  ${GREEN}✓${RESET}  ${tool:<18} ${TOOL_DESC[$tool]}"
+    else
+        echo -e "  ${YELLOW}✗${RESET}  ${tool:<18} ${TOOL_DESC[$tool]}  ${YELLOW}(missing)${RESET}"
+        ALL_OK=false
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Done
+# ---------------------------------------------------------------------------
+echo ""
+echo -e "${BOLD}${GREEN}============================================================${RESET}"
+echo -e "${BOLD}${GREEN}  Setup complete!${RESET}"
+echo -e "${BOLD}${GREEN}============================================================${RESET}"
+echo ""
+echo -e "  ${BOLD}Toolkit location:${RESET}  ${INSTALL_DIR}"
+echo -e "  ${BOLD}Launcher:${RESET}          ${INSTALL_DIR}/interactive_nmap_launcher_v4.py"
+echo -e "  ${BOLD}Playbook:${RESET}          ${INSTALL_DIR}/OSCP_playbook_enhanced_yaml.txt"
+echo -e "  ${BOLD}Scan output:${RESET}       ${INSTALL_DIR}/scan_runs/"
+echo ""
+echo -e "  ${BOLD}Run from toolkit directory:${RESET}"
+echo -e "  ${CYAN}  cd ${INSTALL_DIR} && sudo python3 interactive_nmap_launcher_v4.py${RESET}"
+echo ""
+echo -e "  ${BOLD}Or via symlink (from anywhere):${RESET}"
+echo -e "  ${CYAN}  cd ${INSTALL_DIR} && sudo oscp-scan${RESET}"
+echo ""
+
+if [[ "$ALL_OK" == false ]]; then
+    warn "Some tools are missing. The launcher will still run but affected"
+    warn "follow-up modules will be skipped automatically at runtime."
+fi
+
+echo -e "${YELLOW}  ⚠  Authorized use only — labs, CTFs, and exam-prep environments.${RESET}"
+echo ""
