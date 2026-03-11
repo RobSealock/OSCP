@@ -58,6 +58,25 @@ def require_nmap() -> None:
         sys.exit(1)
 
 
+
+
+def print_tool_banner() -> None:
+    """Print availability of optional tools used by this launcher."""
+    tools = [
+        ("xsltproc", "XML→HTML"),
+        ("whatweb", "Web fingerprint"),
+        ("nikto", "Web baseline"),
+        ("ffuf", "Content discovery"),
+        ("smbclient", "SMB shares"),
+        ("enum4linux", "SMB enum"),
+        ("snmpwalk", "SNMP enum"),
+    ]
+    print("\n[+] Optional tool availability:")
+    for name, purpose in tools:
+        status = "OK" if have_bin(name) else "missing"
+        print(f"    - {name:<10} : {status:<7} ({purpose})")
+
+
 def yes_no(prompt: str, default: bool = False) -> bool:
     suffix = "[Y/n]" if default else "[y/N]"
     ans = input(f"{prompt} {suffix}: ").strip().lower()
@@ -148,46 +167,82 @@ def run_or_resume_oA(
     cwd: Optional[Path] = None,
     combined_log: Optional[Path] = None,
 ) -> int:
+    """Run an nmap -oA command, or resume/skip if outputs exist and look valid.
+
+    Validity checks:
+      - .xml/.nmap/.gnmap exist and non-empty
+      - XML is parseable
+
+    If files exist but XML is corrupt/empty, the scan is re-run.
+    """
     xml = Path(str(base_path) + ".xml")
     nmap = Path(str(base_path) + ".nmap")
     gnmap = Path(str(base_path) + ".gnmap")
-    if xml.exists() and nmap.exists() and gnmap.exists():
-        print(f"[+] Resume: existing Nmap output found for {base_path.name}, skipping step.")
-        append_log(combined_log, f"[+] Resume skip: {base_path}\n")
-        return 0
-    return run_streaming_command(cmd, label=label, cwd=cwd, combined_log=combined_log)
 
+    def non_empty(p: Path) -> bool:
+        return p.exists() and p.is_file() and p.stat().st_size > 0
+
+    def xml_ok(p: Path) -> bool:
+        if not non_empty(p):
+            return False
+        try:
+            ET.parse(str(p))
+            return True
+        except ET.ParseError:
+            return False
+
+    if non_empty(nmap) and non_empty(gnmap) and xml_ok(xml):
+        print(f"[+] Resume: existing valid Nmap output found for {base_path.name}, skipping step.")
+        append_log(combined_log, f"[+] Resume skip (valid outputs): {base_path}\n")
+        return 0
+
+    if xml.exists() or nmap.exists() or gnmap.exists():
+        print(f"[!] Resume: partial/corrupt outputs detected for {base_path.name}; re-running step.")
+        append_log(combined_log, f"[!] Resume rerun (partial/corrupt): {base_path}\n")
+
+    return run_streaming_command(cmd, label=label, cwd=cwd, combined_log=combined_log)
 
 # ---------------------------
 # XML / HTML / notes
 # ---------------------------
 
 def parse_nmap_xml(xml_file: Path) -> Dict:
+    """Parse a subset of Nmap XML into a stable structure.
+
+    Improvements:
+      - chooses IPv4 if present, else first available address (IPv6/MAC/etc.)
+      - tolerates partially-written XML by failing gracefully
+    """
     result = {"hosts": []}
-    if not xml_file.exists():
+    if not xml_file.exists() or xml_file.stat().st_size == 0:
         return result
     try:
         tree = ET.parse(xml_file)
     except ET.ParseError:
         return result
-
     root = tree.getroot()
+
     for host in root.findall("host"):
         state_el = host.find("status")
         state = state_el.get("state", "unknown") if state_el is not None else "unknown"
 
         address = "unknown"
-        for addr in host.findall("address"):
+        addrs = host.findall("address")
+        for addr in addrs:
             if addr.get("addrtype") == "ipv4":
                 address = addr.get("addr", "unknown")
                 break
+        if address == "unknown" and addrs:
+            address = addrs[0].get("addr", "unknown")
 
         hostnames = [x.get("name") for x in host.findall("./hostnames/hostname") if x.get("name")]
+
         ports = []
         for port in host.findall("./ports/port"):
             st = port.find("state")
             if st is None or st.get("state") != "open":
                 continue
+
             svc = port.find("service")
             scripts = []
             for s in port.findall("script"):
@@ -195,6 +250,7 @@ def parse_nmap_xml(xml_file: Path) -> Dict:
                     "id": s.get("id", ""),
                     "output": s.get("output", ""),
                 })
+
             ports.append({
                 "port": port.get("portid", ""),
                 "protocol": port.get("protocol", ""),
@@ -204,14 +260,15 @@ def parse_nmap_xml(xml_file: Path) -> Dict:
                 "extrainfo": svc.get("extrainfo", "") if svc is not None else "",
                 "scripts": scripts,
             })
+
         result["hosts"].append({
             "address": address,
             "state": state,
             "hostnames": hostnames,
             "open_ports": ports,
         })
-    return result
 
+    return result
 
 def build_html(xml_file: Path, html_file: Path, log_file: Optional[Path] = None) -> None:
     if not have_bin("xsltproc"):
@@ -225,61 +282,82 @@ def build_html(xml_file: Path, html_file: Path, log_file: Optional[Path] = None)
 
 
 def merge_nmap_xmls(xml_paths: Iterable[Path], output_xml: Path) -> bool:
-    xml_paths = [p for p in xml_paths if p.exists()]
-    if not xml_paths:
+    """Merge multiple Nmap XML reports into a single *valid* Nmap XML report.
+
+    Strategy:
+      - Use the first valid XML as the base document (preserves scan metadata + runstats).
+      - Merge additional <host> elements by IPv4 address (fallback to first address).
+      - Merge <port> entries into existing hosts by (protocol, portid).
+      - Deep-copy merged XML nodes to avoid moving elements between trees.
+
+    Note: If the same port exists in multiple inputs, the first instance wins.
+    """
+    import copy
+
+    xml_list = [p for p in xml_paths if p.exists() and p.stat().st_size > 0]
+    if not xml_list:
         return False
 
-    merged_root = ET.Element("nmaprun", attrib={
-        "scanner": "nmap",
-        "args": "combined-from-multiple-scans",
-        "version": "merged",
-        "xmloutputversion": "1.05",
-    })
-    host_index = {}
+    base_tree = None
+    base_root = None
+    base_path = None
+    for p in xml_list:
+        try:
+            base_tree = ET.parse(p)
+            base_root = base_tree.getroot()
+            base_path = p
+            break
+        except ET.ParseError:
+            continue
+
+    if base_tree is None or base_root is None:
+        return False
 
     def host_key(host_el: ET.Element) -> str:
-        for addr in host_el.findall("address"):
+        addrs = host_el.findall("address")
+        for addr in addrs:
             if addr.get("addrtype") == "ipv4":
                 return addr.get("addr", "unknown")
-        addr = host_el.find("address")
-        return addr.get("addr", "unknown") if addr is not None else "unknown"
+        if addrs:
+            return addrs[0].get("addr", "unknown")
+        return "unknown"
 
-    for xml_path in xml_paths:
+    host_index = {host_key(h): h for h in base_root.findall("host")}
+
+    for p in xml_list:
+        if base_path and p.resolve() == base_path.resolve():
+            continue
         try:
-            root = ET.parse(xml_path).getroot()
+            root = ET.parse(p).getroot()
         except ET.ParseError:
             continue
 
         for host in root.findall("host"):
             key = host_key(host)
             if key not in host_index:
-                new_host = ET.SubElement(merged_root, "host")
-                for child in host:
-                    if child.tag != "ports":
-                        new_host.append(child)
-                ET.SubElement(new_host, "ports")
-                host_index[key] = new_host
+                base_root.append(copy.deepcopy(host))
+                host_index[key] = base_root.findall("host")[-1]
+                continue
 
             target_host = host_index[key]
             target_ports = target_host.find("ports")
             if target_ports is None:
                 target_ports = ET.SubElement(target_host, "ports")
 
-            existing = {(p.get("protocol"), p.get("portid")) for p in target_ports.findall("port")}
+            existing_ports = {(pt.get("protocol"), pt.get("portid")) for pt in target_ports.findall("port")}
             source_ports = host.find("ports")
             if source_ports is None:
                 continue
 
-            for p in source_ports.findall("port"):
-                p_key = (p.get("protocol"), p.get("portid"))
-                if p_key in existing:
+            for port in source_ports.findall("port"):
+                p_key = (port.get("protocol"), port.get("portid"))
+                if p_key in existing_ports:
                     continue
-                target_ports.append(p)
-                existing.add(p_key)
+                target_ports.append(copy.deepcopy(port))
+                existing_ports.add(p_key)
 
-    ET.ElementTree(merged_root).write(output_xml, encoding="utf-8", xml_declaration=True)
+    base_tree.write(output_xml, encoding="utf-8", xml_declaration=True)
     return True
-
 
 def service_buckets(parsed: Dict) -> Dict[str, List[Tuple[str, str]]]:
     buckets: Dict[str, List[Tuple[str, str]]] = {}
@@ -294,32 +372,31 @@ def service_buckets(parsed: Dict) -> Dict[str, List[Tuple[str, str]]]:
 def generate_mermaid(parsed: Dict) -> str:
     lines = [
         "flowchart TD",
-        "  A[Start] --> B[Initial Nmap Scan]",
+        " A[Start] --> B[Initial Nmap Scan]",
     ]
     idx = 0
     for host in parsed.get("hosts", []):
         host_node = f"H{idx}"
-        lines.append(f'  B --> {host_node}["{host["address"]}"]')
+        lines.append(f' B --> {host_node}["{host["address"]}"]')
         j = 0
         for p in host["open_ports"]:
             port_node = f"P{idx}_{j}"
             label = f'{p["port"]}/{p["protocol"]} {p["service"]}'.replace('"', "'")
-            lines.append(f'  {host_node} --> {port_node}["{label}"]')
+            lines.append(f' {host_node} --> {port_node}["{label}"]')
             svc = (p["service"] or "").lower()
-            if svc in {"http", "https"}:
-                lines.append(f'  {port_node} --> W{idx}_{j}["Web enum"]')
+            if "http" in svc:
+                lines.append(f' {port_node} --> W{idx}_{j}["Web enum"]')
             elif svc in {"microsoft-ds", "netbios-ssn"}:
-                lines.append(f'  {port_node} --> S{idx}_{j}["SMB enum"]')
+                lines.append(f' {port_node} --> S{idx}_{j}["SMB enum"]')
             elif svc == "ftp":
-                lines.append(f'  {port_node} --> F{idx}_{j}["FTP review"]')
+                lines.append(f' {port_node} --> F{idx}_{j}["FTP review"]')
             elif svc == "snmp":
-                lines.append(f'  {port_node} --> N{idx}_{j}["SNMP walk"]')
+                lines.append(f' {port_node} --> N{idx}_{j}["SNMP walk"]')
             elif svc == "ldap":
-                lines.append(f'  {port_node} --> L{idx}_{j}["LDAP review"]')
+                lines.append(f' {port_node} --> L{idx}_{j}["LDAP review"]')
             j += 1
         idx += 1
     return "```mermaid\n" + "\n".join(lines) + "\n```"
-
 
 def generate_markdown_summary(
     title: str,
@@ -447,21 +524,29 @@ def maybe_run_obs(xml_file: Path, workspace: Path) -> None:
 # Follow-up enumeration
 # ---------------------------
 
-def follow_up_http(ip: str, port: str, out_dir: Path, log_file: Optional[Path]) -> None:
-    url = f"http://{ip}:{port}" if port != "80" else f"http://{ip}"
+def follow_up_http(ip: str, port: str, svc: str, out_dir: Path, log_file: Optional[Path]) -> None:
+    svc_l = (svc or "").lower()
+    https_ports = {"443", "8443", "9443"}
+    is_https = ("https" in svc_l) or (port in https_ports)
+    scheme = "https" if is_https else "http"
+
+    if (scheme == "http" and port == "80") or (scheme == "https" and port == "443"):
+        url = f"{scheme}://{ip}"
+    else:
+        url = f"{scheme}://{ip}:{port}"
+
     if have_bin("whatweb"):
-        run_streaming_command(["whatweb", url], label=f"HTTP whatweb {ip}:{port}", combined_log=log_file)
+        run_streaming_command(["whatweb", url], label=f"WEB whatweb {ip}:{port}", combined_log=log_file)
     if have_bin("nikto"):
-        run_streaming_command(["nikto", "-h", url], label=f"HTTP nikto {ip}:{port}", combined_log=log_file)
+        run_streaming_command(["nikto", "-h", url], label=f"WEB nikto {ip}:{port}", combined_log=log_file)
     if have_bin("ffuf"):
         wordlist = "/usr/share/wordlists/dirb/common.txt"
         if Path(wordlist).exists():
             run_streaming_command(
                 ["ffuf", "-u", f"{url}/FUZZ", "-w", wordlist, "-mc", "200,301,302,403"],
-                label=f"HTTP ffuf {ip}:{port}",
-                combined_log=log_file
+                label=f"WEB ffuf {ip}:{port}",
+                combined_log=log_file,
             )
-
 
 def follow_up_smb(ip: str, out_dir: Path, log_file: Optional[Path]) -> None:
     if have_bin("smbclient"):
@@ -498,8 +583,8 @@ def service_follow_up(parsed: Dict, workspace: Path, log_file: Optional[Path]) -
                 continue
             seen.add(key)
 
-            if svc in {"http", "https"}:
-                follow_up_http(ip, port, follow_dir, log_file)
+            if ("http" in svc) or (port in {"80","443","8080","8443","9443"} and ("http" in svc or svc == "")):
+            follow_up_http(ip, port, svc, follow_dir, log_file)
             elif svc in {"microsoft-ds", "netbios-ssn"}:
                 follow_up_smb(ip, follow_dir, log_file)
             elif svc == "snmp":
@@ -671,7 +756,7 @@ def ad_scan() -> None:
     target = prompt_until_valid("Enter AD target IP (X.X.X.X): ", validate_ip)
     stamp = now_stamp()
     workspace = make_workspace("AD", target, stamp)
-    log_file = workspace / f"AD_{sanitize_target(target)}_{stamp}_combined.txt"
+    log_file = workspace / 'run.log'
     append_log(log_file, f"AD scan target: {target}\nTimestamp: {stamp}\n\n")
     base = f"AD_{sanitize_target(target)}_{stamp}"
 
@@ -754,6 +839,7 @@ def ad_scan() -> None:
 def main() -> None:
     require_root()
     require_nmap()
+    print_tool_banner()
 
     print("\nSelect Scan Type")
     print("A) Fast Subnet Scan")
