@@ -77,3 +77,11 @@ python3 playbook_runner.py \
   --out plan.md
 
 
+# Install PyYAML if not already present (needed for playbook triage scoring)
+pip install pyyaml --break-system-packages
+
+# Place your playbook in the same directory as the script
+# It auto-detects: OSCP_playbook_enhanced_yaml.txt / .yaml / oscp_playbook.yaml
+
+# Run
+sudo python3 interactive_nmap_launcher_v4.py
