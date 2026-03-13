@@ -1,0 +1,1576 @@
+schema_version: 2.1
+intended_use: Authorized labs, CTFs, and exam preparation only
+last_updated: 2026-03-12
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SERVICE FINGERPRINT MAP
+# Each entry matches detected Nmap service fingerprints to likely foothold paths.
+# Fields:
+#   match.service         — nmap service name substring match
+#   match.product_contains — nmap product field substring list (any match)
+#   match.port_in         — exact port number list
+#   match.title_contains  — http-title NSE output substring (FIX: now matched)
+#   priority              — base triage score (higher = try first)
+#   likely_paths          — foothold_pattern IDs to evaluate
+#   recommended_enumeration — tools to run
+# ─────────────────────────────────────────────────────────────────────────────
+
+service_fingerprint_map:
+
+  # ── Web ─────────────────────────────────────────────────────────────────
+  - match:
+      service: http
+      product_contains:
+        - Apache
+        - nginx
+        - IIS
+        - lighttpd
+        - Werkzeug
+        - Gunicorn
+        - Caddy
+    priority: 10
+    likely_paths:
+      - WEB-CONTENT-DISCOVERY
+      - EXPOSED-BACKUP
+      - FILE-UPLOAD-BYPASS
+      - SQLI
+      - LFI
+      - SSTI
+      - DEFAULT-CREDS
+    recommended_enumeration:
+      - whatweb
+      - ffuf
+      - gobuster
+      - nikto
+
+  - match:
+      service: http
+      title_contains: WordPress
+    priority: 10
+    likely_paths:
+      - WORDPRESS-PLUGIN-EXPOSURE
+      - WORDPRESS-CREDS
+      - EXPOSED-BACKUP
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - whatweb
+      - wpscan --url http://<target> --enumerate vp,vt,u
+      - ffuf
+
+  - match:
+      service: http
+      product_contains:
+        - Apache Tomcat
+    priority: 9
+    likely_paths:
+      - TOMCAT-MANAGER
+      - DEFAULT-CREDS
+      - WEB-CONTENT-DISCOVERY
+      - FILE-UPLOAD-BYPASS
+    recommended_enumeration:
+      - whatweb
+      - curl -I http://<target>:8080/manager/html
+      - ffuf
+
+  - match:
+      service: http
+      product_contains:
+        - Jenkins
+    priority: 9
+    likely_paths:
+      - JENKINS-CONSOLE-OR-BUILD-ABUSE
+      - DEFAULT-CREDS
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - whatweb
+      - curl -I http://<target>:8080/login
+      - curl -I http://<target>:8080/script
+
+  - match:
+      service: http
+      product_contains:
+        - Werkzeug
+        - Flask
+    priority: 8
+    likely_paths:
+      - SSTI
+      - LFI
+      - WEB-CONTENT-DISCOVERY
+    recommended_enumeration:
+      - whatweb
+      - ffuf
+
+  - match:
+      service: http
+      port_in:
+        - 8080
+        - 8443
+        - 8888
+        - 9090
+        - 9200
+    priority: 8
+    likely_paths:
+      - TOMCAT-MANAGER
+      - JENKINS-CONSOLE-OR-BUILD-ABUSE
+      - DEFAULT-CREDS
+      - WEB-CONTENT-DISCOVERY
+      - ELASTICSEARCH-UNAUTH
+    recommended_enumeration:
+      - whatweb
+      - curl
+      - ffuf
+
+  # ── SMB ─────────────────────────────────────────────────────────────────
+  - match:
+      service: microsoft-ds
+    priority: 10
+    likely_paths:
+      - SMB-ANON-SHARE-CREDS
+      - MS17-010-PATTERN
+      - CREDENTIAL-REUSE
+      - SMB-SIGNING-RELAY
+    recommended_enumeration:
+      - smbclient -L //<target> -N
+      - enum4linux -a <target>
+      - netexec smb <target>
+
+  - match:
+      service: netbios-ssn
+    priority: 8
+    likely_paths:
+      - SMB-ANON-SHARE-CREDS
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - smbclient -L //<target> -N
+      - enum4linux -a <target>
+
+  # ── FTP ─────────────────────────────────────────────────────────────────
+  - match:
+      service: ftp
+    priority: 8
+    likely_paths:
+      - FTP-ANON-UPLOAD
+      - CREDENTIAL-REUSE
+      - EXPOSED-BACKUP
+    recommended_enumeration:
+      - nmap --script ftp-anon,ftp-syst -p21 <target>
+
+  # ── SSH ─────────────────────────────────────────────────────────────────
+  - match:
+      service: ssh
+    priority: 5
+    likely_paths:
+      - CREDENTIAL-REUSE
+      - KEY-REUSE
+      - SSH-KEY-BRUTEFORCE
+    recommended_enumeration:
+      - nmap --script ssh-auth-methods,ssh-hostkey -p22 <target>
+      - banner-review
+
+  # ── NFS ─────────────────────────────────────────────────────────────────
+  - match:
+      service: nfs
+    priority: 9
+    likely_paths:
+      - NFS-EXPORTED-SECRETS
+      - NFS-MISCONFIG-PRIVESC
+    recommended_enumeration:
+      - showmount -e <target>
+      - nmap --script nfs-ls,nfs-showmount,nfs-statfs -p111,2049 <target>
+      - mount -t nfs <target>:/share /mnt
+
+  - match:
+      service: mountd
+    priority: 8
+    likely_paths:
+      - NFS-EXPORTED-SECRETS
+    recommended_enumeration:
+      - showmount -e <target>
+
+  # ── SNMP ─────────────────────────────────────────────────────────────────
+  - match:
+      service: snmp
+    priority: 7
+    likely_paths:
+      - SNMP-USER-DISCOVERY
+      - TARGETED-CREDENTIAL-ATTACK
+      - SERVICE-CORRELATION
+    recommended_enumeration:
+      - snmpwalk -v2c -c public <target>
+      - snmpwalk -v2c -c private <target>
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  - match:
+      service: redis
+    priority: 8
+    likely_paths:
+      - REDIS-UNAUTH-PIVOT
+    recommended_enumeration:
+      - redis-cli -h <target> PING
+      - redis-cli -h <target> INFO
+      - redis-cli -h <target> CONFIG GET dir
+
+  # ── Databases ────────────────────────────────────────────────────────────
+  - match:
+      service: mysql
+    priority: 7
+    likely_paths:
+      - DB-CREDENTIAL-DISCOVERY
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - nmap --script mysql-info,mysql-empty-password -p3306 <target>
+
+  - match:
+      service: ms-wbt-server
+    priority: 5
+    likely_paths:
+      - RDP-WITH-RECOVERED-CREDS
+    recommended_enumeration:
+      - credential-correlation
+
+  - match:
+      service: dns
+      port_in:
+        - 53
+    priority: 7
+    likely_paths:
+      - DNS-ENUM
+    recommended_enumeration:
+      - dnsrecon -t axfr -d <target>
+      - dig axfr @<target>
+      - nmap --script dns-zone-transfer -p53 <target>
+
+  - match:
+      service: smtp
+      port_in:
+        - 25
+        - 465
+        - 587
+    priority: 7
+    likely_paths:
+      - SMTP-ENUM
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - nmap --script smtp-commands,smtp-enum-users -p25 <target>
+      - smtp-user-enum -M VRFY -U <userlist> -t <target>
+
+  - match:
+      service: pop3
+      port_in:
+        - 110
+        - 995
+    priority: 5
+    likely_paths:
+      - MAIL-ENUM
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - manual-review
+
+  - match:
+      service: imap
+      port_in:
+        - 143
+        - 993
+    priority: 5
+    likely_paths:
+      - MAIL-ENUM
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - manual-review
+
+  - match:
+      service: kerberos
+      port_in:
+        - 88
+        - 464
+    priority: 8
+    likely_paths:
+      - AD-SURFACE
+      - ASREPROAST
+      - KERBEROAST
+    recommended_enumeration:
+      - nmap --script krb5-enum-users -p88 <target>
+
+  - match:
+      service: ldap
+      port_in:
+        - 389
+        - 636
+        - 3268
+        - 3269
+    priority: 8
+    likely_paths:
+      - AD-SURFACE
+      - DIRECTORY-ENUM
+    recommended_enumeration:
+      - nmap --script ldap-rootdse,ldap-search -p389 <target>
+
+  - match:
+      service: rpc
+      port_in:
+        - 111
+        - 135
+    priority: 6
+    likely_paths:
+      - RPC-ENUM
+    recommended_enumeration:
+      - rpcinfo -p <target>
+      - nmap --script rpcinfo -p111 <target>
+
+  - match:
+      service: winrm
+      port_in:
+        - 5985
+        - 5986
+    priority: 7
+    likely_paths:
+      - WINRM-WITH-RECOVERED-CREDS
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - netexec winrm <target>
+
+  - match:
+      service: mssql
+      port_in:
+        - 1433
+    priority: 7
+    likely_paths:
+      - DB-CREDENTIAL-DISCOVERY
+      - CREDENTIAL-REUSE
+      - MSSQL-XPCMD
+    recommended_enumeration:
+      - nmap --script ms-sql-info,ms-sql-empty-password -p1433 <target>
+      - netexec mssql <target>
+
+  - match:
+      service: postgresql
+      port_in:
+        - 5432
+    priority: 6
+    likely_paths:
+      - DB-CREDENTIAL-DISCOVERY
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - nmap --script pgsql-brute -p5432 <target>
+
+  - match:
+      service: oracle-tns
+      port_in:
+        - 1521
+    priority: 4
+    likely_paths:
+      - DB-CREDENTIAL-DISCOVERY
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - manual-review
+
+  - match:
+      service: vnc
+      port_in:
+        - 5900
+    priority: 6
+    likely_paths:
+      - REMOTE-DESKTOP-WITH-RECOVERED-CREDS
+      - VNC-NO-AUTH
+    recommended_enumeration:
+      - nmap --script vnc-info,realvnc-auth-bypass -p5900 <target>
+
+  - match:
+      service: ajp
+      port_in:
+        - 8009
+    priority: 6
+    likely_paths:
+      - GHOSTCAT-AJP
+      - WEB-STACK-SECONDARY
+    recommended_enumeration:
+      - nmap --script ajp-headers,ajp-request -p8009 <target>
+
+  - match:
+      service: java-rmi
+      port_in:
+        - 1100
+        - 1099
+    priority: 5
+    likely_paths:
+      - MIDDLEWARE-ENUM
+      - JAVA-RMI-EXPLOIT
+    recommended_enumeration:
+      - nmap --script rmi-vuln-classloader,rmi-dumpregistry -p1099 <target>
+
+  - match:
+      service: http
+      port_in:
+        - 9200
+        - 9300
+    priority: 7
+    likely_paths:
+      - ELASTICSEARCH-UNAUTH
+    recommended_enumeration:
+      - curl http://<target>:9200/_cat/indices
+      - curl http://<target>:9200/_cluster/settings
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WEB STACK ENUM MODULES
+# ─────────────────────────────────────────────────────────────────────────────
+
+web_stack_enum_modules:
+
+  - stack: generic-http
+    detect_if:
+      any_service:
+        - http
+        - https
+    modules:
+      - name: fingerprint
+        commands:
+          - whatweb -a 3 http://<target>
+          - curl -I http://<target>
+      - name: content-discovery
+        commands:
+          - ffuf -u http://<target>/FUZZ -w <wordlist> -mc 200,201,204,301,302,307,401,403,405 -t 50
+          - gobuster dir -u http://<target> -w <wordlist> --no-error
+      - name: file-extension-discovery
+        commands:
+          - ffuf -u http://<target>/FUZZ -w <wordlist> -e .php,.asp,.aspx,.txt,.bak,.zip,.sql,.conf,.log -mc 200,301,302,401,403
+      - name: baseline-web-checks
+        commands:
+          - nikto -h http://<target>
+      - name: lfi-parameter-fuzzing
+        commands:
+          - ffuf -u 'http://<target>/index.php?page=FUZZ' -w <lfi_wordlist>
+          - ffuf -u 'http://<target>/index.php?file=FUZZ' -w <lfi_wordlist>
+
+  - stack: wordpress
+    detect_if:
+      title_contains: WordPress
+      whatweb_identifies: WordPress
+    modules:
+      - name: wordpress-enum
+        commands:
+          - wpscan --url http://<target> --enumerate vp,vt,u --no-banner
+      - name: content-discovery
+        commands:
+          - ffuf -u http://<target>/FUZZ -w <wordlist>
+      - name: xmlrpc-check
+        commands:
+          - curl -s http://<target>/xmlrpc.php -d '<methodCall><methodName>system.listMethods</methodName></methodCall>'
+
+  - stack: tomcat
+    detect_if:
+      banner_contains: Apache Tomcat
+    modules:
+      - name: manager-review
+        commands:
+          - curl -sk -o /dev/null -w "%{http_code}" http://<target>:8080/manager/html
+          - curl -sk -o /dev/null -w "%{http_code}" http://<target>:8080/host-manager/html
+      - name: content-discovery
+        commands:
+          - ffuf -u http://<target>:8080/FUZZ -w <wordlist>
+      - name: war-deploy-check
+        commands:
+          - curl -sk -u tomcat:tomcat http://<target>:8080/manager/text/list
+
+  - stack: jenkins
+    detect_if:
+      banner_contains: Jenkins
+      whatweb_identifies: Jenkins
+    modules:
+      - name: endpoint-review
+        commands:
+          - curl -I http://<target>:8080/login
+          - curl -I http://<target>:8080/script
+          - curl -I http://<target>:8080/asynchPeople
+      - name: groovy-script-surface
+        commands:
+          - browser/manual review of /script endpoint — test for unauthenticated access
+
+  - stack: php-parameterized-app
+    detect_if:
+      indicators:
+        - dynamic GET parameters present
+        - forms present
+        - PHP endpoints discovered
+    modules:
+      - name: sqli-check
+        commands:
+          - sqlmap -u '<url>' --batch --level 3
+          - sqlmap -u '<url>' --forms --batch --level 3
+      - name: lfi-check
+        commands:
+          - ffuf -u 'http://<target>/index.php?page=FUZZ' -w <lfi_wordlist>
+          - ffuf -u 'http://<target>/index.php?file=FUZZ' -w <lfi_wordlist>
+      - name: ssti-check
+        commands:
+          - "manual: inject {{7*7}}, ${7*7}, <%= 7*7 %> into parameters"
+
+  - stack: elasticsearch
+    detect_if:
+      port_in:
+        - 9200
+        - 9300
+    modules:
+      - name: unauth-check
+        commands:
+          - curl http://<target>:9200/
+          - curl http://<target>:9200/_cat/indices?v
+          - curl http://<target>:9200/_cluster/settings?pretty
+
+  - stack: ajp-ghostcat
+    detect_if:
+      port_in:
+        - 8009
+    modules:
+      - name: ghostcat-check
+        commands:
+          - nmap --script ajp-headers,ajp-request -p8009 <target>
+          - manual: test Ghostcat (CVE-2020-1938) with ajpfuzzer or exploit module
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FOOTHOLD PATTERNS
+# ─────────────────────────────────────────────────────────────────────────────
+
+foothold_patterns:
+
+  - id: WEB-CONTENT-DISCOVERY
+    name: Hidden Web Content Discovery
+    trigger:
+      services: [http, https]
+    confidence_boost: 200/301/302/403 responses; admin/dev/backup/upload paths discovered
+    signals:
+      - /admin
+      - /backup
+      - /dev
+      - /uploads
+      - .bak
+      - .zip
+      - .sql
+      - /api
+      - /console
+    enumeration_commands:
+      - ffuf -u http://<target>/FUZZ -w <wordlist> -mc 200,201,204,301,302,307,401,403,405 -t 50 -c
+      - gobuster dir -u http://<target> -w <wordlist> --no-error
+    likely_next_steps:
+      - check for login panels
+      - check for default credentials
+      - check upload functionality
+      - review exposed source or backup files
+    estimated_exam_frequency: very_high
+
+  - id: FILE-UPLOAD-BYPASS
+    name: File Upload Validation Weakness
+    trigger:
+      services: [http, https]
+    confidence_boost: upload endpoint discovered; form with file input present
+    signals:
+      - upload form
+      - file manager
+      - image upload
+      - document submission
+    enumeration_commands:
+      - ffuf -u http://<target>/FUZZ -w <wordlist>
+      - manual proxy-based review of upload endpoints
+    likely_next_steps:
+      - test extension handling (double ext, null byte, MIME confusion)
+      - map upload storage location to webroot
+      - attempt webshell upload
+    estimated_exam_frequency: high
+
+  - id: SQLI
+    name: SQL Injection Leading to Credentials or Admin Access
+    trigger:
+      services: [http, https]
+    confidence_boost: dynamic parameters; error messages or timing anomalies
+    signals:
+      - id parameter
+      - search parameter
+      - login form
+      - DB error text
+    enumeration_commands:
+      - sqlmap -u '<url>' --batch --level 3
+      - sqlmap -u '<url>' --forms --batch --level 3
+    likely_next_steps:
+      - extract user table and password hashes
+      - test credential reuse
+      - check for OS-level interaction (xp_cmdshell, UDF, etc.)
+    estimated_exam_frequency: high
+
+  - id: LFI
+    name: Local File Inclusion
+    trigger:
+      services: [http, https]
+    confidence_boost: page/template/file parameters; traversal indicators
+    signals:
+      - page=
+      - file=
+      - template=
+      - path=
+    enumeration_commands:
+      - ffuf -u 'http://<target>/index.php?page=FUZZ' -w <lfi_wordlist>
+      - manual traversal review (../../../etc/passwd)
+    likely_next_steps:
+      - read /etc/passwd, /etc/shadow (if readable)
+      - read web app config files for DB credentials
+      - chain to RCE via log poisoning or /proc/self/environ
+    estimated_exam_frequency: medium_high
+
+  - id: SSTI
+    name: Server-Side Template Injection
+    trigger:
+      services: [http, https]
+    confidence_boost: Jinja2/Twig/Mako/Freemarker stack detected; eval-like behavior
+    signals:
+      - Werkzeug/Flask detected
+      - template rendering endpoints
+      - user-controlled output reflects input
+    enumeration_commands:
+      - "manual: inject {{7*7}} / ${7*7} / <%= 7*7 %>"
+      - tplmap -u 'http://<target>/page?param=INJECT'
+    likely_next_steps:
+      - confirm template engine
+      - achieve RCE via template escape
+    estimated_exam_frequency: medium_high
+
+  - id: WORDPRESS-PLUGIN-EXPOSURE
+    name: WordPress Plugin / Theme Weakness
+    trigger:
+      services: [http, https]
+    confidence_boost: WordPress detected; outdated plugin/theme versions found
+    signals:
+      - wp-content
+      - wp-admin
+      - enumerated users
+      - outdated plugin version
+    enumeration_commands:
+      - wpscan --url http://<target> --enumerate vp,vt,u --no-banner
+    likely_next_steps:
+      - search plugin CVEs on WPScan DB or ExploitDB
+      - test admin access paths
+      - review wp-config.php for secrets after foothold
+    estimated_exam_frequency: medium_high
+
+  - id: WORDPRESS-CREDS
+    name: WordPress Credential Attack (xmlrpc / login bruteforce)
+    trigger:
+      services: [http, https]
+    confidence_boost: WordPress detected; xmlrpc.php accessible; admin user enumerated
+    signals:
+      - xmlrpc.php accessible
+      - admin user enumerated via wpscan
+    enumeration_commands:
+      - wpscan --url http://<target> --usernames admin --passwords <rockyou> --no-banner
+      - curl -s http://<target>/xmlrpc.php -d '<methodCall><methodName>system.listMethods</methodName></methodCall>'
+    likely_next_steps:
+      - use valid creds to reach wp-admin
+      - install or edit plugin/theme with PHP payload
+    estimated_exam_frequency: medium
+
+  - id: TOMCAT-MANAGER
+    name: Tomcat Manager Exposure
+    trigger:
+      services: [http]
+      ports: [8080, 8443]
+    confidence_boost: Apache Tomcat banner; /manager/html accessible or returns 401
+    signals:
+      - manager path returns 200/401
+      - Tomcat banner
+    enumeration_commands:
+      - curl -sk -o /dev/null -w "%{http_code}" http://<target>:8080/manager/html
+      - whatweb http://<target>:8080
+    likely_next_steps:
+      - spray default credentials (tomcat:tomcat, admin:admin, etc.)
+      - deploy WAR file with webshell if authenticated
+    estimated_exam_frequency: medium
+
+  - id: JENKINS-CONSOLE-OR-BUILD-ABUSE
+    name: Jenkins Administrative Surface
+    trigger:
+      services: [http]
+      ports: [8080, 8443]
+    confidence_boost: Jenkins detected; /script or /job surfaces accessible
+    signals:
+      - /login accessible
+      - /script accessible (unauthenticated = critical)
+      - job configuration visible
+    enumeration_commands:
+      - curl -I http://<target>:8080/login
+      - curl -I http://<target>:8080/script
+    likely_next_steps:
+      - test unauthenticated /script console for Groovy RCE
+      - enumerate jobs for credentials or environment variables
+    estimated_exam_frequency: medium
+
+  - id: SMB-ANON-SHARE-CREDS
+    name: SMB Anonymous Share to Secrets
+    trigger:
+      services: [microsoft-ds, netbios-ssn]
+    confidence_boost: anonymous listing allowed; share browsing succeeds
+    signals:
+      - guest/null access
+      - config files in shares
+      - SSH keys
+      - password files
+    enumeration_commands:
+      - smbclient -L //<target> -N
+      - enum4linux -a <target>
+      - netexec smb <target> -u '' -p ''
+    likely_next_steps:
+      - download all readable share contents
+      - grep for credentials and keys
+      - test recovered creds across all services
+    estimated_exam_frequency: very_high
+
+  - id: SMB-SIGNING-RELAY
+    name: SMB Signing Disabled / Relay Attack Surface
+    trigger:
+      services: [microsoft-ds]
+    confidence_boost: smb2-security-mode shows signing NOT required
+    signals:
+      - Message signing enabled but not required
+      - SMBv1 present
+    enumeration_commands:
+      - nmap --script smb2-security-mode -p445 <target>
+      - netexec smb <target> --gen-relay-list relay_targets.txt
+    likely_next_steps:
+      - document signing posture for relay opportunities
+      - correlate with other NTLM coercion vectors in lab context
+    estimated_exam_frequency: medium
+
+  - id: MS17-010-PATTERN
+    name: Legacy SMB Remote Service Weakness (EternalBlue)
+    trigger:
+      services: [microsoft-ds]
+    confidence_boost: legacy Windows host; SMBv1 present; positive NSE vuln check
+    signals:
+      - Windows 7/2008-era fingerprints
+      - SMBv1 enabled
+      - smb-vuln-ms17-010 returns VULNERABLE
+    enumeration_commands:
+      - nmap --script smb-vuln-ms17-010 -p445 <target>
+    likely_next_steps:
+      - confirm host profile and patch level
+      - document exploitability for report
+    estimated_exam_frequency: low_medium
+
+  - id: FTP-ANON-UPLOAD
+    name: FTP Anonymous Access / Upload
+    trigger:
+      services: [ftp]
+    confidence_boost: anonymous login accepted
+    signals:
+      - anonymous access confirmed
+      - writable directory
+      - files present
+    enumeration_commands:
+      - nmap --script ftp-anon,ftp-syst,ftp-bounce -p21 <target>
+    likely_next_steps:
+      - download all accessible files (grep for creds)
+      - test upload to writable directories
+      - correlate with web service root for RCE
+    estimated_exam_frequency: medium
+
+  - id: NFS-EXPORTED-SECRETS
+    name: NFS Export Containing Keys or Source
+    trigger:
+      services: [nfs, mountd]
+    signals:
+      - exported share accessible without auth
+      - SSH key files
+      - config files
+      - source code
+    enumeration_commands:
+      - showmount -e <target>
+      - nmap --script nfs-ls,nfs-showmount,nfs-statfs -p111,2049 <target>
+      - mount -t nfs <target>:/share /mnt/nfs
+    likely_next_steps:
+      - mount and search all exports
+      - look for .ssh/id_rsa, config files, password stores
+      - test recovered keys against SSH
+    estimated_exam_frequency: medium
+
+  - id: NFS-MISCONFIG-PRIVESC
+    name: NFS no_root_squash Local Privilege Escalation
+    trigger:
+      services: [nfs]
+    signals:
+      - no_root_squash in export options
+      - writable export
+    enumeration_commands:
+      - showmount -e <target>
+      - cat /etc/exports (post-foothold)
+    likely_next_steps:
+      - mount export from attacker with root
+      - copy SUID binary or overwrite authorized_keys
+    estimated_exam_frequency: low_medium
+
+  - id: SNMP-USER-DISCOVERY
+    name: SNMP Information Leakage
+    trigger:
+      services: [snmp]
+    signals:
+      - default community string accepted (public/private)
+      - usernames in OID output
+      - process names / running services
+    enumeration_commands:
+      - snmpwalk -v2c -c public <target>
+      - snmpwalk -v2c -c public <target> 1.3.6.1.4.1.77.1.2.25
+      - snmpwalk -v2c -c public <target> 1.3.6.1.2.1.25.4.2.1.2
+    likely_next_steps:
+      - extract usernames and align with other services
+      - review running processes for service versions
+      - target weak community strings for additional data
+    estimated_exam_frequency: low_medium
+
+  - id: REDIS-UNAUTH-PIVOT
+    name: Redis Unauthenticated Exposure
+    trigger:
+      services: [redis]
+    signals:
+      - PING returns PONG without credentials
+      - CONFIG GET accessible
+    enumeration_commands:
+      - redis-cli -h <target> PING
+      - redis-cli -h <target> INFO
+      - redis-cli -h <target> CONFIG GET dir
+      - redis-cli -h <target> KEYS '*'
+    likely_next_steps:
+      - review data store for credentials or tokens
+      - attempt CONFIG SET to write SSH keys (if service account allows)
+      - correlate service user context
+    estimated_exam_frequency: low
+
+  - id: EXPOSED-BACKUP
+    name: Exposed Backups / Archives
+    trigger:
+      services: [http, https, ftp, microsoft-ds]
+    signals:
+      - .bak / .zip / .tar / .sql / .gz
+      - site backup in share
+      - config copy
+    enumeration_commands:
+      - ffuf -u http://<target>/FUZZ -w <wordlist> -e .bak,.zip,.tar,.gz,.sql,.conf -mc 200,301
+      - gobuster dir -u http://<target> -w <wordlist> -x bak,zip,tar,sql,conf
+      - smbclient -L //<target> -N
+    likely_next_steps:
+      - download and extract archive
+      - grep for credentials, API keys, connection strings
+      - map hidden routes from source
+    estimated_exam_frequency: high
+
+  - id: CREDENTIAL-REUSE
+    name: Recovered Credential Reuse
+    trigger:
+      services: [ssh, microsoft-ds, ms-wbt-server, winrm, http, mysql, mssql, postgresql]
+    confidence_boost: credentials recovered from any prior stage
+    signals:
+      - same username across services
+      - passwords in config files
+      - hashes from DB
+      - keys in backups
+    enumeration_commands:
+      - netexec smb <target> -u <user> -p <password>
+      - netexec winrm <target> -u <user> -p <password>
+      - ssh <user>@<target>
+    likely_next_steps:
+      - test credential on all discovered services
+      - prioritize SSH / WinRM / web admin first
+      - document which services accept the credential
+    estimated_exam_frequency: very_high
+
+  - id: KEY-REUSE
+    name: SSH Private Key Reuse
+    trigger:
+      services: [ssh]
+    confidence_boost: private key found in NFS, SMB share, FTP, or web backup
+    signals:
+      - id_rsa / id_ecdsa / id_ed25519 found
+      - authorized_keys listing
+    enumeration_commands:
+      - ssh -i <key> <user>@<target>
+    likely_next_steps:
+      - try key against all discovered SSH services
+      - check key permissions (must be 600)
+      - enumerate users from /etc/passwd first
+    estimated_exam_frequency: medium
+
+  - id: SSH-KEY-BRUTEFORCE
+    name: SSH Authentication Method Weakness
+    trigger:
+      services: [ssh]
+    confidence_boost: ssh-auth-methods shows password auth enabled; usernames known
+    signals:
+      - PasswordAuthentication yes
+      - users enumerated from other services
+    enumeration_commands:
+      - nmap --script ssh-auth-methods -p22 <target>
+    likely_next_steps:
+      - verify password auth before any spray
+      - use known usernames with common passwords (rockyou top-1000)
+    estimated_exam_frequency: low_medium
+
+  - id: DNS-ENUM
+    name: DNS Exposure / Zone Transfer Surface
+    trigger:
+      services: [dns]
+    signals:
+      - zone transfer allowed
+      - hostname patterns reveal internal structure
+    enumeration_commands:
+      - dnsrecon -t axfr -d <target>
+      - dig axfr @<target>
+      - nmap --script dns-zone-transfer,dns-recursion -p53 <target>
+    likely_next_steps:
+      - map discovered hostnames to IPs
+      - add hostnames to /etc/hosts
+      - correlate with web vhosts
+    estimated_exam_frequency: medium
+
+  - id: SMTP-ENUM
+    name: SMTP User Enumeration / Open Relay
+    trigger:
+      services: [smtp]
+    signals:
+      - VRFY/EXPN responds with usernames
+      - open relay accepted external mail
+    enumeration_commands:
+      - smtp-user-enum -M VRFY -U <userlist> -t <target>
+      - smtp-user-enum -M EXPN -U <userlist> -t <target>
+      - nmap --script smtp-commands,smtp-enum-users,smtp-open-relay -p25 <target>
+    likely_next_steps:
+      - compile username list for credential testing
+      - test open relay for phishing or header injection
+    estimated_exam_frequency: medium
+
+  - id: MAIL-ENUM
+    name: Mailbox Service Surface (POP3/IMAP)
+    trigger:
+      services: [pop3, imap]
+    signals: []
+    enumeration_commands:
+      - manual banner grab and capability review
+    likely_next_steps:
+      - treat as credential-reuse pivot
+      - test recovered passwords against mailbox
+    estimated_exam_frequency: low_medium
+
+  - id: DIRECTORY-ENUM
+    name: Directory Service Surface (LDAP)
+    trigger:
+      services: [ldap]
+    signals: []
+    enumeration_commands:
+      - nmap --script ldap-rootdse,ldap-search -p389 <target>
+      - ldapsearch -x -H ldap://<target> -b '' -s base
+    likely_next_steps:
+      - anonymous bind to enumerate base DN
+      - extract users, groups, and password policy
+    estimated_exam_frequency: medium_high
+
+  - id: AD-SURFACE
+    name: Active Directory Surface (Kerberos + LDAP + SMB)
+    trigger:
+      services: [kerberos, ldap, microsoft-ds]
+    signals: []
+    enumeration_commands:
+      - netexec smb <target> --users -u '' -p ''
+      - nmap --script krb5-enum-users --script-args krb5-enum-users.realm=<DOMAIN> -p88 <target>
+    likely_next_steps:
+      - inventory domain identifiers and trust boundaries
+      - attempt ASREPRoast for accounts without pre-auth
+      - attempt Kerberoast for service accounts
+    estimated_exam_frequency: high
+
+  - id: ASREPROAST
+    name: Kerberos ASREPRoast — Accounts Without Pre-Auth
+    trigger:
+      services: [kerberos]
+    confidence_boost: krb5-enum-users returns valid usernames; AD environment confirmed
+    signals:
+      - users enumerated
+      - DONT_REQUIRE_PREAUTH flag
+    enumeration_commands:
+      - impacket-GetNPUsers <DOMAIN>/ -usersfile users.txt -no-pass -dc-ip <target>
+    likely_next_steps:
+      - crack returned hashes offline (hashcat -m 18200)
+      - use cracked credentials for lateral movement
+    estimated_exam_frequency: medium
+
+  - id: KERBEROAST
+    name: Kerberoasting — Service Account SPN Abuse
+    trigger:
+      services: [kerberos]
+    confidence_boost: AD user credentials obtained; SPNs present
+    signals:
+      - service accounts with SPNs
+      - domain user credentials available
+    enumeration_commands:
+      - impacket-GetUserSPNs <DOMAIN>/<user>:<password> -dc-ip <target> -request
+    likely_next_steps:
+      - crack TGS hashes offline (hashcat -m 13100)
+      - use service account credentials
+    estimated_exam_frequency: medium
+
+  - id: RPC-ENUM
+    name: RPC Service Surface
+    trigger:
+      services: [rpc]
+    signals: []
+    enumeration_commands:
+      - rpcinfo -p <target>
+      - nmap --script rpcinfo -p111 <target>
+    likely_next_steps:
+      - identify RPC-exposed services (NFS, NIS, etc.)
+      - correlate endpoint map to further attack surface
+    estimated_exam_frequency: low_medium
+
+  - id: WINRM-WITH-RECOVERED-CREDS
+    name: WinRM with Recovered Credentials
+    trigger:
+      services: [winrm]
+    signals: []
+    enumeration_commands:
+      - netexec winrm <target> -u <user> -p <password>
+      - evil-winrm -i <target> -u <user> -p <password>
+    likely_next_steps:
+      - validate credential access
+      - enumerate local privilege escalation paths
+    estimated_exam_frequency: medium
+
+  - id: RDP-WITH-RECOVERED-CREDS
+    name: RDP with Recovered Credentials
+    trigger:
+      services: [ms-wbt-server]
+    signals: []
+    enumeration_commands:
+      - nmap --script rdp-enum-encryption -p3389 <target>
+      - xfreerdp /u:<user> /p:<password> /v:<target>
+    likely_next_steps:
+      - interactive session for post-exploitation
+    estimated_exam_frequency: low_medium
+
+  - id: VNC-NO-AUTH
+    name: VNC No Authentication
+    trigger:
+      services: [vnc]
+    signals:
+      - VNC auth type None or VNC without password
+    enumeration_commands:
+      - nmap --script vnc-info,realvnc-auth-bypass -p5900 <target>
+    likely_next_steps:
+      - connect directly with vncviewer
+      - document screen access and interactive session
+    estimated_exam_frequency: low
+
+  - id: REMOTE-DESKTOP-WITH-RECOVERED-CREDS
+    name: Remote Desktop (VNC/RDP) with Recovered Credentials
+    trigger:
+      services: [vnc, ms-wbt-server]
+    signals: []
+    enumeration_commands:
+      - manual review after credential recovery
+    likely_next_steps:
+      - only attempt after credential recovery
+      - document interactive access and user context
+    estimated_exam_frequency: low_medium
+
+  - id: DB-CREDENTIAL-DISCOVERY
+    name: Database Empty Password / Default Credentials
+    trigger:
+      services: [mysql, mssql, postgresql]
+    confidence_boost: empty-password NSE returns positive
+    signals:
+      - root/sa with no password
+      - default service credentials
+    enumeration_commands:
+      - nmap --script mysql-empty-password,mysql-info -p3306 <target>
+      - nmap --script ms-sql-empty-password,ms-sql-info -p1433 <target>
+    likely_next_steps:
+      - enumerate databases and tables
+      - extract user/password hashes
+      - check for OS interaction (xp_cmdshell, UDF)
+    estimated_exam_frequency: medium
+
+  - id: MSSQL-XPCMD
+    name: MSSQL xp_cmdshell RCE
+    trigger:
+      services: [mssql]
+    confidence_boost: sa/admin credentials obtained; xp_cmdshell enabled or configurable
+    signals:
+      - sa account accessible
+      - sysadmin role confirmed
+    enumeration_commands:
+      - nmap --script ms-sql-xp-cmdshell -p1433 <target>
+      - netexec mssql <target> -u sa -p <password> -x 'whoami'
+    likely_next_steps:
+      - enable xp_cmdshell if disabled (requires sysadmin)
+      - execute OS commands for shell
+    estimated_exam_frequency: low_medium
+
+  - id: ELASTICSEARCH-UNAUTH
+    name: Elasticsearch Unauthenticated Access
+    trigger:
+      services: [http]
+      ports: [9200, 9300]
+    signals:
+      - cluster health accessible
+      - index data readable without auth
+    enumeration_commands:
+      - curl http://<target>:9200/
+      - curl http://<target>:9200/_cat/indices?v
+      - curl http://<target>:9200/_search?pretty
+    likely_next_steps:
+      - dump index data for credentials or PII
+      - review cluster config for sensitive entries
+    estimated_exam_frequency: low_medium
+
+  - id: GHOSTCAT-AJP
+    name: Ghostcat AJP File Read (CVE-2020-1938)
+    trigger:
+      services: [ajp]
+      ports: [8009]
+    confidence_boost: AJP port open; Tomcat detected on associated HTTP port
+    signals:
+      - port 8009 open
+      - Tomcat on port 8080
+    enumeration_commands:
+      - nmap --script ajp-headers,ajp-request -p8009 <target>
+    likely_next_steps:
+      - use Ghostcat exploit to read WEB-INF/web.xml
+      - chain with file upload for RCE
+    estimated_exam_frequency: low_medium
+
+  - id: JAVA-RMI-EXPLOIT
+    name: Java RMI Deserialization / Registry Abuse
+    trigger:
+      services: [java-rmi]
+    signals:
+      - RMI registry accessible
+      - deserialization endpoint exposed
+    enumeration_commands:
+      - nmap --script rmi-vuln-classloader,rmi-dumpregistry -p1099 <target>
+    likely_next_steps:
+      - enumerate registry objects
+      - test deserialization via ysoserial payloads
+    estimated_exam_frequency: low
+
+  - id: MIDDLEWARE-ENUM
+    name: Middleware Service Surface (Java RMI)
+    trigger:
+      services: [java-rmi]
+    signals: []
+    enumeration_commands:
+      - nmap --script rmi-dumpregistry -p1099 <target>
+    likely_next_steps:
+      - capture version/banner and map to app stack
+    estimated_exam_frequency: low
+
+  - id: WEB-STACK-SECONDARY
+    name: Secondary Web Stack Surface (AJP / Alt Ports)
+    trigger:
+      services: [ajp, http]
+    signals: []
+    enumeration_commands:
+      - manual review / checklist-driven enumeration
+    likely_next_steps:
+      - correlate alternate connectors to primary web stack
+      - check for admin surfaces on non-standard ports
+    estimated_exam_frequency: medium
+
+  - id: TARGETED-CREDENTIAL-ATTACK
+    name: Service Correlation to Targeted Credential Attack
+    trigger:
+      services: [snmp, smtp, ldap]
+    signals:
+      - usernames obtained from enumeration
+    enumeration_commands:
+      - correlate usernames to password spray targets
+    likely_next_steps:
+      - build username list from enumeration output
+      - targeted password spray (low-and-slow to avoid lockout)
+    estimated_exam_frequency: medium
+
+  - id: DEFAULT-CREDS
+    name: Default / Weak Credential Access
+    trigger:
+      services: [http, ftp, mysql, mssql, postgresql, vnc, ssh]
+    confidence_boost: vendor default credentials known; admin panel accessible; service banner identifies product version
+    signals:
+      - admin:admin
+      - admin:password
+      - tomcat:tomcat
+      - root: (blank)
+      - sa: (blank)
+      - product banner present
+    enumeration_commands:
+      - curl -sk -u admin:admin http://<target>/manager/html
+      - curl -sk -u admin:password http://<target>/admin
+      - netexec smb <target> -u admin -p admin
+    likely_next_steps:
+      - test vendor default credentials for identified product
+      - use Seclists default-credentials list
+      - document which service accepted credentials
+    estimated_exam_frequency: high
+
+  - id: SERVICE-CORRELATION
+    name: Cross-Service Signal Correlation
+    trigger:
+      services: [snmp, smtp, ftp, smb]
+    signals:
+      - common usernames across services
+      - version strings correlated to CVEs
+    enumeration_commands:
+      - manual correlation review
+    likely_next_steps:
+      - map findings to a unified attack surface model
+      - test reuse of any recovered information
+    estimated_exam_frequency: medium
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LINUX PRIVILEGE ESCALATION DECISION TREE
+# ─────────────────────────────────────────────────────────────────────────────
+
+linux_privesc_decision_tree:
+  entry_condition: Low-privilege shell obtained on Linux host
+  steps:
+    - id: LINUX-STEP-01
+      question: Can the current user run commands via sudo?
+      commands:
+        - sudo -l
+      if_yes: LINUX-STEP-01A
+      if_no: LINUX-STEP-02
+
+    - id: LINUX-STEP-01A
+      question: Do allowed binaries or scripts map to known escape patterns?
+      look_for:
+        - NOPASSWD entries
+        - interpreters (python, perl, ruby, bash)
+        - archive tools (tar, zip, rsync)
+        - editors (vi, vim, nano, less, more)
+        - custom scripts writable by current user
+      next: LINUX-ROOT-CANDIDATE
+
+    - id: LINUX-STEP-02
+      question: Are there unusual or abusable SUID binaries?
+      commands:
+        - find / -perm -4000 2>/dev/null
+      if_yes: LINUX-STEP-02A
+      if_no: LINUX-STEP-03
+
+    - id: LINUX-STEP-02A
+      question: Do any SUID binaries map to GTFOBins or custom code abuse?
+      look_for:
+        - unexpected interpreters with SUID
+        - custom binaries owned by root
+        - GTFOBins-aligned tools (find, nmap, env, etc.)
+      next: LINUX-ROOT-CANDIDATE
+
+    - id: LINUX-STEP-03
+      question: Are root-owned cron jobs or scheduled scripts writable or predictable?
+      commands:
+        - cat /etc/crontab
+        - ls -la /etc/cron.*
+        - pspy64 (if available)
+        - systemctl list-timers
+      if_yes: LINUX-STEP-03A
+      if_no: LINUX-STEP-04
+
+    - id: LINUX-STEP-03A
+      question: Can task input, script path, or referenced file be modified?
+      next: LINUX-ROOT-CANDIDATE
+
+    - id: LINUX-STEP-04
+      question: Do local configuration files contain credentials or secrets?
+      commands:
+        - grep -RinE '(password|passwd|secret|token|key|api_key)' /var/www /opt /home 2>/dev/null
+        - find / -name '.env' -o -name 'config*' -o -name '*.conf' 2>/dev/null
+        - find / -name 'wp-config.php' -o -name 'settings.py' 2>/dev/null
+      if_yes: LINUX-STEP-04A
+      if_no: LINUX-STEP-05
+
+    - id: LINUX-STEP-04A
+      question: Can recovered secrets authenticate to a more privileged account or service?
+      next: LINUX-ROOT-CANDIDATE
+
+    - id: LINUX-STEP-05
+      question: Are dangerous Linux capabilities set on binaries?
+      commands:
+        - getcap -r / 2>/dev/null
+      if_yes: LINUX-STEP-05A
+      if_no: LINUX-STEP-06
+
+    - id: LINUX-STEP-05A
+      question: Does capability set permit privilege or file-access escalation?
+      look_for:
+        - cap_setuid+ep
+        - cap_dac_override+ep
+        - cap_sys_admin+ep
+        - cap_net_raw+ep
+      next: LINUX-ROOT-CANDIDATE
+
+    - id: LINUX-STEP-06
+      question: Is the user in a powerful group or attached to risky local services?
+      commands:
+        - id
+        - groups
+        - ps aux
+      look_for:
+        - docker group
+        - lxd/lxc group
+        - adm / disk / shadow group
+        - running as service user with writable config
+      if_yes: LINUX-ROOT-CANDIDATE
+      if_no: LINUX-STEP-07
+
+    - id: LINUX-STEP-07
+      question: Are there writable services, startup scripts, or unusual PATH behaviors?
+      commands:
+        - systemctl list-units --type=service
+        - find / -writable -type f -not -path '/proc/*' 2>/dev/null
+        - echo $PATH
+      if_yes: LINUX-ROOT-CANDIDATE
+      if_no: LINUX-STEP-08
+
+    - id: LINUX-STEP-08
+      question: Is the kernel/service version old enough to justify local exploit research?
+      commands:
+        - uname -a
+        - cat /etc/os-release
+        - dpkg -l | grep linux-image
+      if_yes: LINUX-LAST-RESORT
+      if_no: LINUX-END
+
+  terminal_nodes:
+    - id: LINUX-ROOT-CANDIDATE
+      meaning: High-value escalation path likely exists; switch to focused validation.
+    - id: LINUX-LAST-RESORT
+      meaning: Conventional paths appear weak; carefully research lab-appropriate local escalation.
+    - id: LINUX-END
+      meaning: No obvious fast path; revisit credential reuse, hidden services, app pivots.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WINDOWS PRIVILEGE ESCALATION DECISION TREE
+# ─────────────────────────────────────────────────────────────────────────────
+
+windows_privesc_decision_tree:
+  entry_condition: Low-privilege shell obtained on Windows host
+  steps:
+    - id: WIN-STEP-01
+      question: What does automated local enumeration show first?
+      commands:
+        - winpeas.exe
+        - whoami /priv
+        - whoami /groups
+        - systeminfo
+      next: WIN-STEP-02
+
+    - id: WIN-STEP-02
+      question: Are there saved credentials, auto-logon values, or plaintext secrets?
+      look_for:
+        - HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon (AutoAdminLogon)
+        - Unattend.xml / sysprep files
+        - PowerShell history ($env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt)
+        - Credential Manager (cmdkey /list)
+      if_yes: WIN-PRIV-CANDIDATE
+      if_no: WIN-STEP-03
+
+    - id: WIN-STEP-03
+      question: Are any services misconfigured?
+      look_for:
+        - unquoted service paths with spaces
+        - weak service permissions (sc sdshow)
+        - modifiable service binaries
+        - writable service directories
+      commands:
+        - wmic service get name,pathname,startmode | findstr /i "auto" | findstr /i /v "c:\windows"
+        - accesschk.exe -uwcqv * /accepteula
+      if_yes: WIN-PRIV-CANDIDATE
+      if_no: WIN-STEP-04
+
+    - id: WIN-STEP-04
+      question: Does the user have abusable token privileges?
+      look_for:
+        - SeImpersonatePrivilege (Potato attacks)
+        - SeAssignPrimaryTokenPrivilege
+        - SeBackupPrivilege
+        - SeRestorePrivilege
+        - SeTakeOwnershipPrivilege
+      if_yes: WIN-PRIV-CANDIDATE
+      if_no: WIN-STEP-05
+
+    - id: WIN-STEP-05
+      question: Are scheduled tasks or startup entries modifiable?
+      look_for:
+        - modifiable task actions (schtasks /query /fo LIST /v)
+        - writable startup folders
+        - user-writable task-linked scripts
+      if_yes: WIN-PRIV-CANDIDATE
+      if_no: WIN-STEP-06
+
+    - id: WIN-STEP-06
+      question: Do local groups or software platforms provide indirect escalation?
+      look_for:
+        - Backup Operators
+        - Server Operators
+        - DnsAdmins (DLL injection via DNS service)
+        - Hyper-V related groups
+        - developer tooling with elevated hooks
+      if_yes: WIN-PRIV-CANDIDATE
+      if_no: WIN-STEP-07
+
+    - id: WIN-STEP-07
+      question: Is the host old enough to justify local exploit research in lab conditions?
+      commands:
+        - systeminfo
+        - wmic qfe list
+      if_yes: WIN-LAST-RESORT
+      if_no: WIN-END
+
+  terminal_nodes:
+    - id: WIN-PRIV-CANDIDATE
+      meaning: Plausible Windows escalation path likely exists; switch to targeted validation.
+    - id: WIN-LAST-RESORT
+      meaning: Classic paths appear weak; assess lab-appropriate local exploit research.
+    - id: WIN-END
+      meaning: No fast local path; revisit credentials, service trust, or additional footholds.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RECOMMENDED WORKFLOW
+# ─────────────────────────────────────────────────────────────────────────────
+
+recommended_workflow:
+  phase_1_initial_recon:
+    - "nmap -sS -sV -T4 --min-rate 5000 --open -oA phase1 <target>"
+    - "nmap -sS -sV -Pn -T4 -p- --min-rate 5000 --script default,vulners --script-args mincvss=6.0 -oA phase2 <target>"
+    - "nmap -sU -T4 -p 53,69,111,123,137,138,161,162,500,1194,1900,2049,5353 --open -oA udp <target>"
+
+  phase_2_service_routing:
+    - Match detected services against service_fingerprint_map
+    - Sort by priority descending
+    - Launch recommended_enumeration modules for top matches
+    - Run exploit_confirm checks for high-confidence findings
+
+  phase_3_foothold_hypothesis:
+    - For each matched service, evaluate corresponding foothold_patterns
+    - Score matches based on observed signals
+    - Pursue top 2-3 highest confidence paths first
+    - Run exploit confirmation (non-destructive PoC) per pattern
+
+  phase_4_post_foothold:
+    - Determine OS (uname -a / systeminfo)
+    - Run linpeas.sh or winpeas.exe
+    - Work through appropriate privesc decision tree
+    - Document evidence, credentials, and lateral reuse opportunities
+
+  phase_5_review_loop:
+    - If no foothold found: revisit hidden ports, exposed backups, credential reuse, vhosts
+    - If no privesc found: revisit app credentials, group memberships, scheduled tasks, custom binaries
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SCORING MODEL
+# ─────────────────────────────────────────────────────────────────────────────
+
+simple_scoring_model:
+  base_scores:
+    very_high: 5
+    high: 4
+    medium_high: 3
+    medium: 2
+    low_medium: 1
+    low: 1
+  signal_bonus:
+    sensitive_file_exposed: 3
+    anonymous_access: 3
+    admin_panel_discovered: 2
+    credentials_recovered: 5
+    dynamic_parameters_present: 2
+    upload_form_present: 2
+    version_exposed: 1
+    service_default_banner: 1
+    unauthenticated_db_access: 4
+    signing_disabled: 2
+  example_logic:
+    - Start with base score from estimated_exam_frequency
+    - Add priority from service_fingerprint_map
+    - Add bonuses for observed signals
+    - Prioritize patterns with score >= 6
+    - Run exploit_confirm for all score >= 6 entries
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REFERENCE CATALOG
+# ─────────────────────────────────────────────────────────────────────────────
+
+reference_catalog:
+  common_ports_services:
+    - {service: ftp,          ports: [21],              protocols: [tcp],       notes: "Anonymous login and upload check first."}
+    - {service: ssh,          ports: [22],              protocols: [tcp],       notes: "Auth method check; password spray only if known users."}
+    - {service: smtp,         ports: [25, 465, 587],    protocols: [tcp],       notes: "User enumeration via VRFY/EXPN; relay check."}
+    - {service: dns,          ports: [53],              protocols: [tcp, udp],  notes: "Zone transfer; record enumeration; hostname mapping."}
+    - {service: http,         ports: [80, 8080, 8443],  protocols: [tcp],       notes: "Content discovery, tech ID, upload bypass, injection."}
+    - {service: pop3,         ports: [110, 995],        protocols: [tcp],       notes: "Credential reuse pivot."}
+    - {service: imap,         ports: [143, 993],        protocols: [tcp],       notes: "Credential reuse pivot."}
+    - {service: smb,          ports: [139, 445],        protocols: [tcp],       notes: "Anonymous access; signing; vuln checks; enum."}
+    - {service: mssql,        ports: [1433],            protocols: [tcp],       notes: "Empty password; xp_cmdshell; config exposure."}
+    - {service: nfs,          ports: [111, 2049],       protocols: [tcp, udp],  notes: "showmount; no_root_squash; credential files."}
+    - {service: mysql,        ports: [3306],            protocols: [tcp],       notes: "Empty password; config file correlation."}
+    - {service: rdp,          ports: [3389],            protocols: [tcp],       notes: "After credential recovery only."}
+    - {service: postgresql,   ports: [5432],            protocols: [tcp],       notes: "Default/empty credentials."}
+    - {service: vnc,          ports: [5900],            protocols: [tcp],       notes: "No-auth check; credential reuse."}
+    - {service: redis,        ports: [6379],            protocols: [tcp],       notes: "Unauthenticated PING/INFO/CONFIG GET."}
+    - {service: elasticsearch, ports: [9200, 9300],     protocols: [tcp],       notes: "Unauthenticated data access."}
+    - {service: kerberos,     ports: [88, 464],         protocols: [tcp, udp],  notes: "AD auth; ASREPRoast; Kerberoast."}
+    - {service: ldap,         ports: [389, 636, 3268, 3269], protocols: [tcp], notes: "Anonymous bind; directory dump."}
+    - {service: winrm,        ports: [5985, 5986],      protocols: [tcp],       notes: "Credential reuse target."}
+    - {service: rpc,          ports: [111, 135],        protocols: [tcp],       notes: "NFS/SMB correlation."}
+    - {service: snmp,         ports: [161, 162],        protocols: [udp],       notes: "Default community string; OID enumeration."}
+    - {service: ajp,          ports: [8009],            protocols: [tcp],       notes: "Ghostcat CVE-2020-1938."}
+    - {service: java-rmi,     ports: [1099, 1100],      protocols: [tcp],       notes: "Deserialization; registry enum."}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REPORTING HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+reporting_helpers:
+  evidence_requirements:
+    - Record all commands executed and outputs used to justify each conclusion.
+    - Capture screenshots where required; map to each host and objective.
+    - Maintain a clear step-by-step narrative suitable for reproducing results.
+    - For exploit confirmation: record the exact NSE/tool output that confirms exploitability.
+
+  note_templates:
+    host_header:
+      - Target
+      - IP / Hostname
+      - Discovered services
+      - Credentials found
+      - Exploit confirmation results
+      - Findings summary
+      - Next hypotheses
+
+    credential_record:
+      - Username
+      - Secret type (password / hash / key / no-auth)
+      - Source (tool, share, file, service)
+      - Where tested
+      - Result
+
+    exploit_confirm_record:
+      - Pattern ID
+      - Target IP:Port
+      - Tool / NSE script used
+      - Output summary (confirmed / not confirmed / inconclusive)
+      - Evidence path
+
+    artifact_index:
+      - File
+      - Origin
+      - Relevance
+      - Storage path
+      - Notes
