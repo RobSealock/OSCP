@@ -71,6 +71,16 @@ APT_PACKAGES=(
     exploitdb
     hashcat john
     gobuster
+    # NEW: From GitHub repo research
+    cupp               # target-specific wordlist generator
+    crunch             # pattern-based wordlist generation
+    swaks              # SMTP test tool / Library-ms phishing
+    cadaver            # WebDAV interactive client
+    davtest            # WebDAV extension testing
+    wfuzz              # Web fuzzer alternative to ffuf
+    postgresql-client  # psql CLI for PostgreSQL enumeration
+    gpp-decrypt        # decrypt GPP cpassword values
+    responder          # NTLM hash capture via multiple protocols
     jq netcat-openbsd pipx ruby ruby-dev build-essential
     ncat rlwrap
 )
@@ -110,6 +120,10 @@ PYTHON_PACKAGES=(
     pywhisker           # Shadow credentials via msDS-KeyCredentialLink
     bloodhound          # bloodhound-python AD collector
     defaultcreds-cheat-sheet  # creds search <service> CLI
+    # NEW: From GitHub repo research
+    keepass2john        # extract hash from KeePass .kdbx files
+    nosqlmap            # NoSQL injection automation
+    impacket-Get-GPPPassword  # GPP cpassword extraction
 )
 
 for pkg in "${PYTHON_PACKAGES[@]}"; do
@@ -336,6 +350,77 @@ else
         || warn "PrintNightmare download failed"
 fi
 
+# ── php_filter_chain_generator (LFI→RCE without writable files) ──────────────
+PHPCHAIN_DIR="/opt/php_filter_chain_generator"
+if [[ -f "${PHPCHAIN_DIR}/php_filter_chain_generator.py" ]]; then
+    success "php_filter_chain_generator already cloned"
+else
+    info "Cloning php_filter_chain_generator..."
+    git clone --quiet https://github.com/synacktiv/php_filter_chain_generator.git \
+        "$PHPCHAIN_DIR" 2>/dev/null \
+        && success "php_filter_chain_generator cloned to ${PHPCHAIN_DIR}" \
+        || warn "php_filter_chain_generator clone failed"
+fi
+
+# ── SharpEfsPotato (SeImpersonate via EFS) ───────────────────────────────────
+SHARPEFS_DIR="/opt/SharpEfsPotato"
+if [[ -f "${SHARPEFS_DIR}/SharpEfsPotato.exe" ]]; then
+    success "SharpEfsPotato already present"
+else
+    info "Downloading SharpEfsPotato..."
+    mkdir -p "$SHARPEFS_DIR"
+    curl -sL "https://github.com/bugch3ck/SharpEfsPotato/releases/latest/download/SharpEfsPotato.exe" \
+         -o "${SHARPEFS_DIR}/SharpEfsPotato.exe" 2>/dev/null \
+        && cp "${SHARPEFS_DIR}/SharpEfsPotato.exe" "${PRIVESC_DIR}/SharpEfsPotato.exe" 2>/dev/null \
+        && success "SharpEfsPotato downloaded" \
+        || warn "SharpEfsPotato download failed — https://github.com/bugch3ck/SharpEfsPotato"
+fi
+
+# ── BadSuccessor (dMSA privilege escalation — 2025) ──────────────────────────
+BADSUCC_DIR="/opt/BadSuccessor"
+if [[ -d "$BADSUCC_DIR" ]]; then
+    success "BadSuccessor already cloned"
+else
+    info "Cloning BadSuccessor..."
+    git clone --quiet https://github.com/akamai/BadSuccessor.git \
+        "$BADSUCC_DIR" 2>/dev/null \
+        && success "BadSuccessor cloned to ${BADSUCC_DIR}" \
+        || warn "BadSuccessor clone failed — https://github.com/akamai/BadSuccessor"
+fi
+
+# ── PowerUp.ps1 (Windows privilege escalation checks) ────────────────────────
+if [[ -f "${PRIVESC_DIR}/PowerUp.ps1" ]]; then
+    success "PowerUp.ps1 already in ${PRIVESC_DIR}"
+else
+    info "Downloading PowerUp.ps1..."
+    curl -sL "https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Privesc/PowerUp.ps1" \
+         -o "${PRIVESC_DIR}/PowerUp.ps1" 2>/dev/null \
+        && success "PowerUp.ps1 downloaded" \
+        || warn "PowerUp.ps1 download failed"
+fi
+
+# ── PowerView.ps1 (AD enumeration) ───────────────────────────────────────────
+if [[ -f "${PRIVESC_DIR}/PowerView.ps1" ]]; then
+    success "PowerView.ps1 already in ${PRIVESC_DIR}"
+else
+    info "Downloading PowerView.ps1..."
+    curl -sL "https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Recon/PowerView.ps1" \
+         -o "${PRIVESC_DIR}/PowerView.ps1" 2>/dev/null \
+        && success "PowerView.ps1 downloaded" \
+        || warn "PowerView.ps1 download failed"
+fi
+
+# ── accesschk.exe (Sysinternals — service/file permission checks) ────────────
+if [[ -f "${PRIVESC_DIR}/accesschk.exe" ]]; then
+    success "accesschk.exe already in ${PRIVESC_DIR}"
+else
+    info "Downloading accesschk.exe (Sysinternals)..."
+    curl -sL "https://live.sysinternals.com/accesschk.exe" \
+         -o "${PRIVESC_DIR}/accesschk.exe" 2>/dev/null \
+        && success "accesschk.exe downloaded" \
+        || warn "accesschk.exe download failed — get from https://live.sysinternals.com/accesschk64.exe"
+fi
+
 # vulners NSE script
 VULNERS_PATH="/usr/share/nmap/scripts/vulners.nse"
 [[ -f "$VULNERS_PATH" ]] && success "vulners.nse present" || {
@@ -361,6 +446,10 @@ declare -A PRIVESC_URLS=(
     ["SharpUp.exe"]="https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/raw/master/SharpUp.exe"
     ["Seatbelt.exe"]="https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/raw/master/Seatbelt.exe"
     ["mimikatz.exe"]="https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip"
+    # NEW: From GitHub repo research
+    ["SharpEfsPotato.exe"]="https://github.com/bugch3ck/SharpEfsPotato/releases/latest/download/SharpEfsPotato.exe"
+    ["Certify.exe"]="https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/raw/master/Certify.exe"
+    ["SharpView.exe"]="https://github.com/tevora-threat/SharpView/releases/latest/download/SharpView.exe"
 )
 
 for FNAME in "${!PRIVESC_URLS[@]}"; do
@@ -497,7 +586,7 @@ done
 for BIN in netexec bloodyad certipy donpapi pywhisker \
            impacket-GetNPUsers impacket-GetUserSPNs impacket-psexec \
            impacket-wmiexec impacket-ntlmrelayx impacket-secretsdump \
-           bloodhound-python defaultcreds-cheat-sheet; do
+           bloodhound-python defaultcreds-cheat-sheet keepass2john; do
     for DIR in /root/.local/bin "${REAL_HOME}/.local/bin"; do
         if [[ -x "${DIR}/${BIN}" ]]; then
             ln -sf "${DIR}/${BIN}" "/usr/local/bin/${BIN}" 2>/dev/null || true
@@ -560,6 +649,20 @@ declare -A TOOL_DESC=(
     ["rustscan"]="Fast port scanner"
     ["bloodhound-python"]="BloodHound AD collector"
     ["defaultcreds-cheat-sheet"]="Default credentials lookup"
+    # NEW: From GitHub repo research
+    ["cupp"]="Target-specific wordlist generator"
+    ["crunch"]="Pattern wordlist generator"
+    ["swaks"]="SMTP testing and Library-ms phishing"
+    ["cadaver"]="WebDAV interactive client"
+    ["davtest"]="WebDAV extension testing"
+    ["wfuzz"]="Web fuzzer alternative"
+    ["psql"]="PostgreSQL client"
+    ["gpp-decrypt"]="Decrypt GPP cpassword values"
+    ["responder"]="NTLM/NTLMv2 hash capture"
+    ["keepass2john"]="Extract KeePass database hash"
+    ["svn"]="Subversion repository client"
+    ["hydra"]="Credential bruteforce tool"
+    ["medusa"]="Parallel login bruteforcer"
 )
 
 ALL_OK=true
@@ -589,6 +692,9 @@ echo -e "  ${BOLD}Privesc scripts:${RESET}    ${PRIVESC_DIR}/"
 echo -e "  ${BOLD}noPac:${RESET}              /opt/noPac/"
 echo -e "  ${BOLD}targetedKerberoast:${RESET} /opt/targetedKerberoast/"
 echo -e "  ${BOLD}PrintNightmare:${RESET}     /opt/PrintNightmare/"
+echo -e "  ${BOLD}PHP filter chain:${RESET}   /opt/php_filter_chain_generator/"
+echo -e "  ${BOLD}SharpEfsPotato:${RESET}     /opt/SharpEfsPotato/"
+echo -e "  ${BOLD}BadSuccessor:${RESET}       /opt/BadSuccessor/"
 echo ""
 [[ "$ALL_OK" == false ]] \
     && warn "Some tools missing -- affected modules skip at runtime automatically."

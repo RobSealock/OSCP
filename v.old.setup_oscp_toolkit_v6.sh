@@ -101,15 +101,13 @@ PYTHON_PACKAGES=(
     requests
     lxml
     impacket
-    droopescan          # Drupal/Silverstripe scanner
-    git-dumper          # .git directory extraction
-    trufflehog          # Secret scanning in repos
-    donpapi             # DPAPI credential extraction
-    bloodyAD            # ACL/ACE manipulation
-    certipy-ad          # ADCS / shadow credentials
-    pywhisker           # Shadow credentials via msDS-KeyCredentialLink
-    bloodhound          # bloodhound-python AD collector
-    defaultcreds-cheat-sheet  # creds search <service> CLI
+    droopescan
+    git-dumper
+    trufflehog
+    donpapi
+    bloodyAD
+    certipy-ad
+    pywhisker
 )
 
 for pkg in "${PYTHON_PACKAGES[@]}"; do
@@ -237,105 +235,6 @@ else
     rm -rf "$TMP"
 fi
 
-# ── mongosh (MongoDB shell) ───────────────────────────────────────────────────
-if command -v mongosh &>/dev/null; then
-    success "mongosh already installed"
-else
-    info "Installing mongosh..."
-    TMP=$(mktemp -d)
-    MONGOSH_VER="2.5.10"
-    MONGOSH_DEB="mongodb-mongosh_${MONGOSH_VER}_amd64.deb"
-    MONGOSH_URL="https://downloads.mongodb.com/compass/${MONGOSH_DEB}"
-    if curl -sL "$MONGOSH_URL" -o "${TMP}/${MONGOSH_DEB}" 2>/dev/null; then
-        dpkg -i "${TMP}/${MONGOSH_DEB}" 2>/dev/null \
-            && success "mongosh installed" \
-            || warn "mongosh dpkg install failed — manual: dpkg -i ${MONGOSH_DEB}"
-    else
-        warn "mongosh download failed. Get from: https://www.mongodb.com/try/download/shell"
-    fi
-    rm -rf "$TMP"
-fi
-
-# ── kubeletctl (Kubernetes kubelet client) ────────────────────────────────────
-if command -v kubeletctl &>/dev/null || [[ -f /usr/local/bin/kubeletctl ]]; then
-    success "kubeletctl already installed"
-else
-    info "Installing kubeletctl..."
-    KUBELETCTL_URL="https://github.com/cyberark/kubeletctl/releases/latest/download/kubeletctl_linux_amd64"
-    curl -sL "$KUBELETCTL_URL" -o /usr/local/bin/kubeletctl 2>/dev/null \
-        && chmod +x /usr/local/bin/kubeletctl \
-        && success "kubeletctl installed" \
-        || warn "kubeletctl download failed — https://github.com/cyberark/kubeletctl/releases"
-fi
-
-# ── RustScan (fast port scanner) ─────────────────────────────────────────────
-if command -v rustscan &>/dev/null || [[ -f /usr/local/bin/rustscan ]]; then
-    success "rustscan already installed"
-else
-    info "Installing rustscan..."
-    RUSTSCAN_VER="2.4.1"
-    RUSTSCAN_URL="https://github.com/bee-san/RustScan/releases/download/${RUSTSCAN_VER}/x86_64-linux-rustscan.tar.gz.zip"
-    TMP=$(mktemp -d)
-    if curl -sL "$RUSTSCAN_URL" -o "${TMP}/rustscan.tar.gz.zip" 2>/dev/null; then
-        cd "$TMP" && unzip -q rustscan.tar.gz.zip 2>/dev/null \
-            && tar -xzf x86_64-linux-rustscan.tar.gz 2>/dev/null \
-            && mv rustscan /usr/local/bin/rustscan \
-            && chmod +x /usr/local/bin/rustscan \
-            && success "rustscan installed" \
-            || warn "rustscan extract failed"
-        cd - >/dev/null
-    else
-        warn "rustscan download failed — https://github.com/bee-san/RustScan/releases"
-    fi
-    rm -rf "$TMP"
-fi
-
-# ── bloodhound-python (AD collector) ─────────────────────────────────────────
-if command -v bloodhound-python &>/dev/null || python3 -c "import bloodhound" &>/dev/null 2>&1; then
-    success "bloodhound-python already installed"
-else
-    info "Installing bloodhound-python..."
-    pip3 install --quiet --break-system-packages bloodhound 2>/dev/null \
-        || pip3 install --quiet bloodhound 2>/dev/null \
-        || warn "bloodhound-python install failed — pip3 install bloodhound"
-fi
-
-# ── noPac (CVE-2021-42278/42287) ─────────────────────────────────────────────
-NOPAC_DIR="/opt/noPac"
-if [[ -f "${NOPAC_DIR}/noPac.py" ]]; then
-    success "noPac already cloned at ${NOPAC_DIR}"
-else
-    info "Cloning noPac..."
-    git clone --quiet https://github.com/Ridter/noPac.git "$NOPAC_DIR" 2>/dev/null \
-        && success "noPac cloned to ${NOPAC_DIR}" \
-        || warn "noPac clone failed — git clone https://github.com/Ridter/noPac.git"
-fi
-
-# ── targetedKerberoast ────────────────────────────────────────────────────────
-TKRB_DIR="/opt/targetedKerberoast"
-if [[ -f "${TKRB_DIR}/targetedKerberoast.py" ]]; then
-    success "targetedKerberoast already cloned"
-else
-    info "Cloning targetedKerberoast..."
-    git clone --quiet https://github.com/ShutdownRepo/targetedKerberoast.git "$TKRB_DIR" 2>/dev/null \
-        && pip3 install --quiet --break-system-packages -r "${TKRB_DIR}/requirement.txt" 2>/dev/null \
-        && success "targetedKerberoast cloned to ${TKRB_DIR}" \
-        || warn "targetedKerberoast clone failed"
-fi
-
-# ── CVE-2021-1675 PrintNightmare PS module ────────────────────────────────────
-PNIGHTMARE_DIR="/opt/PrintNightmare"
-if [[ -f "${PNIGHTMARE_DIR}/CVE-2021-1675.ps1" ]]; then
-    success "PrintNightmare PS module already present"
-else
-    info "Downloading PrintNightmare PS module..."
-    mkdir -p "$PNIGHTMARE_DIR"
-    curl -sL "https://github.com/calebstewart/CVE-2021-1675/raw/main/CVE-2021-1675.ps1" \
-         -o "${PNIGHTMARE_DIR}/CVE-2021-1675.ps1" 2>/dev/null \
-        && success "PrintNightmare PS module downloaded" \
-        || warn "PrintNightmare download failed"
-fi
-
 # vulners NSE script
 VULNERS_PATH="/usr/share/nmap/scripts/vulners.nse"
 [[ -f "$VULNERS_PATH" ]] && success "vulners.nse present" || {
@@ -355,12 +254,6 @@ declare -A PRIVESC_URLS=(
     ["JuicyPotatoNG.exe"]="https://github.com/antonioCoco/JuicyPotatoNG/releases/latest/download/JuicyPotatoNG.exe"
     ["linpeas.sh"]="https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh"
     ["winPEASx64.exe"]="https://github.com/carlospolop/PEASS-ng/releases/latest/download/winPEASx64.exe"
-    ["nc.exe"]="https://github.com/int0x33/nc.exe/raw/master/nc.exe"
-    ["SharpHound.exe"]="https://github.com/BloodHoundAD/SharpHound/releases/latest/download/SharpHound.exe"
-    ["Rubeus.exe"]="https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/raw/master/Rubeus.exe"
-    ["SharpUp.exe"]="https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/raw/master/SharpUp.exe"
-    ["Seatbelt.exe"]="https://github.com/r3motecontrol/Ghostpack-CompiledBinaries/raw/master/Seatbelt.exe"
-    ["mimikatz.exe"]="https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip"
 )
 
 for FNAME in "${!PRIVESC_URLS[@]}"; do
@@ -496,8 +389,7 @@ done
 
 for BIN in netexec bloodyad certipy donpapi pywhisker \
            impacket-GetNPUsers impacket-GetUserSPNs impacket-psexec \
-           impacket-wmiexec impacket-ntlmrelayx impacket-secretsdump \
-           bloodhound-python defaultcreds-cheat-sheet; do
+           impacket-wmiexec impacket-ntlmrelayx impacket-secretsdump; do
     for DIR in /root/.local/bin "${REAL_HOME}/.local/bin"; do
         if [[ -x "${DIR}/${BIN}" ]]; then
             ln -sf "${DIR}/${BIN}" "/usr/local/bin/${BIN}" 2>/dev/null || true
@@ -555,11 +447,6 @@ declare -A TOOL_DESC=(
     ["curl"]="HTTP utility"
     ["wget"]="Download utility"
     ["rlwrap"]="Readline wrapper for shells"
-    ["mongosh"]="MongoDB shell enum"
-    ["kubeletctl"]="Kubernetes kubelet client"
-    ["rustscan"]="Fast port scanner"
-    ["bloodhound-python"]="BloodHound AD collector"
-    ["defaultcreds-cheat-sheet"]="Default credentials lookup"
 )
 
 ALL_OK=true
@@ -585,10 +472,7 @@ echo -e "  ${BOLD}Run exploit runner (after scanner):${RESET}"
 echo -e "  ${CYAN}  sudo oscp-exploit${RESET}          # auto-finds latest handoff"
 echo -e "  ${CYAN}  sudo python3 ${INSTALL_DIR}/exploit_runner.py <workspace>${RESET}"
 echo ""
-echo -e "  ${BOLD}Privesc scripts:${RESET}    ${PRIVESC_DIR}/"
-echo -e "  ${BOLD}noPac:${RESET}              /opt/noPac/"
-echo -e "  ${BOLD}targetedKerberoast:${RESET} /opt/targetedKerberoast/"
-echo -e "  ${BOLD}PrintNightmare:${RESET}     /opt/PrintNightmare/"
+echo -e "  ${BOLD}Privesc scripts served from:${RESET}  ${PRIVESC_DIR}/"
 echo ""
 [[ "$ALL_OK" == false ]] \
     && warn "Some tools missing -- affected modules skip at runtime automatically."
