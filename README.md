@@ -337,3 +337,42 @@ Used for: credential spray (netexec), BloodHound collection, PtH, WinRM shell.
 | v6 | Architecture split (launcher + exploit_runner + lib). Vhost, .git, PHP wrappers, CeWL, linpeas serve, hash crack, tunneling |
 | v6.1 | SpellBook 172-page integration — +23 patterns, +9 follow-up fns, +16 exploit modules, +12 setup tools |
 | v6.2 | GitHub repo research (top 10) — +12 patterns, +6 follow-up fns, +12 exploit modules, +9 apt tools, +3 git clones, +6 privesc downloads. New: GPP, DCC2, PostgreSQL RCE, Silver Ticket, KeePass, Library-ms phishing, NoSQL, PHP filter chain, WebDAV, Memcached, Rubeus guide, Account Operators |
+
+---
+
+## AD Enumeration Parity Modules (`modules/`)
+
+Add-on tools that bring this kit's **AD/Windows enumeration** to parity with the
+`ad-recon-toolkit` (blue-team) coverage. Each closes a specific enumeration gap
+the base kit lacked. All are **offline-installable** (vendored under `modules/`).
+
+| Tool | Closes gap | Command |
+|------|-----------|---------|
+| `ldeep` | Broad LDAP enum (trusts, delegation, gMSA, sIDHistory, PKI/ADCS, silos) → JSON | `ldeep ldap -u U -p P -d DOM -s ldap://DC all /tmp/out` |
+| `adidnsdump` | ADIDNS record/zone enum (wildcard, wpad) | `adidnsdump -u 'DOM\U' -p P DC --print-zones` |
+| `pre2k` | Pre-created / `PASSWD_NOTREQD` computer accounts | `pre2k auth -u U -p P -d DOM -dc-ip DC` |
+| `gMSADumper` | gMSA readable managed passwords | `python3 gMSADumper.py -u U -p P -d DOM` |
+
+Two further gaps use tools **already installed**: explicit delegation lists via
+`impacket-findDelegation`, and sIDHistory / AdminSDHolder / object-ACL reads via
+`bloodyAD get ...` (plus `netexec ldap --gmsa -M maq -M user-desc -M laps`).
+
+**Install (online):**
+```bash
+pipx install adidnsdump ldeep
+pipx install git+https://github.com/garrettfoster13/pre2k
+```
+
+**Install (offline / airgapped Kali):**
+```bash
+cd modules
+sudo ./install-offline.sh        # installs vendored wheels + stages gMSADumper
+```
+For a hardened airgap missing base deps, build a full closure on a connected,
+matching-Python Kali with `modules/build-offline-bundle.sh`. Full details,
+usage, and the offline-vendorability matrix are in **`modules/README.md`**.
+
+> **Blue-team collectors intentionally NOT ported:** Audit-Policy/logging, host
+> baseline & drift, firewall-change timeline, DHCP config, full GPO-settings
+> audit, PingCastle/PurpleKnight posture scoring, VulnCheck correlation. These
+> are defensive documentation with no offensive-enumeration equivalent.

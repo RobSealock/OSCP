@@ -1,0 +1,9 @@
+# AD-enumeration parity add-ons for the OSCP toolkit.
+# Vendored as portable py3-none-any wheels in ./wheels (offline install).
+adidnsdump==1.4.0
+ldeep==2.0.3
+pre2k==3.0
+# gMSADumper is a standalone script under ./gMSADumper/ (not a wheel).
+#
+# Runtime deps (present on a standard Kali; installed system-wide):
+#   impacket, ldap3, dnspython, pycryptodomex, pyasn1, future
